@@ -1,0 +1,725 @@
+# ARCoS package catalogue - GENERATED, do not edit by hand.
+#
+# Source: ssh://git@github.com/Arrcus/arrcus_rel.git
+# Manifest branches: {'bookworm': 'aminor', 'trixie': 'aminor-trixie'}
+# Regenerate: python -m apm discover
+#
+# 'releases' lists only the releases whose manifest actually contains the
+# package. Eight packages ship in bookworm but not trixie, so this is not the
+# same list for every entry.
+#
+# Curated upstream mappings belong in config/overrides.yaml, which always wins.
+
+version: 1
+generated_at: '2026-09-23'
+generated_from:
+  repository: ssh://git@github.com/Arrcus/arrcus_rel.git
+  branches:
+    bookworm: aminor
+    trixie: aminor-trixie
+  file: .gitmodules
+packages:
+  ONL-standalone:
+    repository: ssh://git@github.com/Arrcus/onl-testbed.git
+    github_repository: Arrcus/onl-testbed
+    submodule_path: ONL-standalone
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: fc5ae88a277765342855005d3d205aecf84093ee
+      trixie: be29bfe664b536336caad394d62d54458fdf48a2
+    debian_source_package: null
+  ONL-xc:
+    repository: ssh://git@github.com/Arrcus/onl-testbed.git
+    github_repository: Arrcus/onl-testbed
+    submodule_path: ONL-xc
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor-xc
+      trixie: aminor-xc
+    commits:
+      bookworm: 226503a7cc78bcb4a12e0061ffd1fe900306d751
+      trixie: 312d3c4999825ee79c0b1fcb1b3e5795cd98ad7d
+    debian_source_package: null
+  arcapi:
+    repository: ssh://git@github.com/Arrcus/arcapi.git
+    github_repository: Arrcus/arcapi
+    submodule_path: packages/arcapi
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 75ef02e9212576a734d2803f2d7dbd1e4eb377d1
+      trixie: ed59f4e8ca9be5bde41ece1ff5b35e7cdb128adb
+    debian_source_package: null
+  arcos-upgrade:
+    repository: ssh://git@github.com/Arrcus/arcos-upgrade.git
+    github_repository: Arrcus/arcos-upgrade
+    submodule_path: arcos-upgrade
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 4a31cf1336c769e117931c56eb82f4c934707c4a
+      trixie: 2dafe903413f00d56dcc74d72dd2355fa36d9397
+    debian_source_package: null
+  arrcus-golang-deps-dev:
+    repository: ssh://git@github.com/Arrcus/third_party.git
+    github_repository: Arrcus/third_party
+    submodule_path: packages/arrcus-golang-deps-dev
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 2f169a45b87c6cb210dc0465df869d30d305ce71
+      trixie: 8e284ce911509bc4f16ae9a495a6a99065c077ad
+    debian_source_package: null
+  arrcus-ha:
+    repository: ssh://git@github.com/Arrcus/arrcus-ha.git
+    github_repository: Arrcus/arrcus-ha
+    submodule_path: packages/arrcus-ha
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 062773f7fed33360e08085f735d42dbaee699d01
+      trixie: 1343d8a6782ac7b333aa3d27dc2693a932724284
+    debian_source_package: null
+  arrcus-sw:
+    repository: ssh://git@github.com/Arrcus/arrcus_sw.git
+    github_repository: Arrcus/arrcus_sw
+    submodule_path: packages/arrcus-sw
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 0d7d534a0f5bfabc4bc2420804c00fabc1ad3d20
+      trixie: bd6164957bf8dc8ec7b32b9cce5e61b96b630961
+    debian_source_package: null
+  arrcus_golang_pkgs:
+    repository: ssh://git@github.com/Arrcus/arrcus_golang_pkgs.git
+    github_repository: Arrcus/arrcus_golang_pkgs
+    submodule_path: packages/arrcus_golang_pkgs
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: f37ee37b9d4f12c98efefdd4b4b455e4e082708a
+      trixie: 43f38427cf5898143e1c98c8cc57adc4f21d142a
+    debian_source_package: null
+  arrcus_k8s_chassis:
+    repository: ssh://git@github.com/Arrcus/arrcus_k8s_chassis.git
+    github_repository: Arrcus/arrcus_k8s_chassis
+    submodule_path: packages/arrcus_k8s_chassis
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: d83f31356c2be6d98509a6e92a72cc129e9f8438
+      trixie: 6c010c5c013449cfb495e59ffc73b78ff92c0f4e
+    debian_source_package: null
+  arrcus_onlp:
+    repository: ssh://git@github.com/arrcus/arrcus_onlp.git
+    github_repository: arrcus/arrcus_onlp
+    submodule_path: packages/arrcus_onlp
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: f2b15ccbd88fe389a9474b53ea4eb941a731ff91
+      trixie: 9c181005cb4216129270990aec99a46e5570e1f7
+    debian_source_package: null
+  babeltrace:
+    repository: ssh://git@github.com/Arrcus/babeltrace.git
+    github_repository: Arrcus/babeltrace
+    submodule_path: packages/babeltrace
+    releases:
+    - bookworm
+    branches:
+      bookworm: aminor
+    commits:
+      bookworm: 82822552fc07e2ae45904a21f82bc0060412e7c6
+    debian_source_package: null
+  bcmsdk:
+    repository: ssh://git@github.com/Arrcus/bcm_sdk.git
+    github_repository: Arrcus/bcm_sdk
+    submodule_path: packages/bcmsdk
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: ab007dd9cd364669db15db65ebc3b0d12e04b6b1
+      trixie: 33956bfed05d74c75c2eb677f8e2009342e1d538
+    debian_source_package: null
+  confd:
+    repository: ssh://git@github.com/Arrcus/confd.git
+    github_repository: Arrcus/confd
+    submodule_path: packages/confd
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: dcfdb8e14fabb192383d04432f71e9bf7d43198e
+      trixie: e7020107b165298b43cfe8b676c7c7f22f9c5a01
+    debian_source_package: null
+  cre2:
+    repository: ssh://git@github.com/Arrcus/cre2.git
+    github_repository: Arrcus/cre2
+    submodule_path: packages/cre2
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: a00a67338a071eefb525cf882bd0b6949ddb0e8c
+      trixie: ff923efbfc2556e83e5380574a1b76df6a3741fb
+    debian_source_package: null
+  ctypesgen:
+    repository: ssh://git@github.com/Arrcus/ctypesgen.git
+    github_repository: Arrcus/ctypesgen
+    submodule_path: packages/ctypesgen
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor-trixie
+    commits:
+      bookworm: 22593b3bcdfe76d7b11e3c755f48be4869f6cc4d
+      trixie: 0fbac497fe9d576c32c516854ef5ae0101511501
+    debian_source_package: null
+  erpl-client:
+    repository: ssh://git@github.com/Arrcus/erpl_client.git
+    github_repository: Arrcus/erpl_client
+    submodule_path: packages/erpl-client
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor-trixie
+    commits:
+      bookworm: fcf2c921c746e70b5b8f9ad7498cedb39bc92ffd
+      trixie: e3c1df777855f87dfef254a74747d81ffb451b01
+    debian_source_package: null
+  erpl-common:
+    repository: ssh://git@github.com/Arrcus/erpl_common.git
+    github_repository: Arrcus/erpl_common
+    submodule_path: packages/erpl-common
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 6fc71fe2c2298e48e6bb7ebc20b195c118a13cd6
+      trixie: 3510e3832e5b04276ac9eba29cc77df9e7bb8664
+    debian_source_package: null
+  ethtool:
+    repository: ssh://git@github.com/Arrcus/ethtool.git
+    github_repository: Arrcus/ethtool
+    submodule_path: packages/ethtool
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor-trixie
+    commits:
+      bookworm: 1efe1e904ce138d20e23c86f40d539059e309336
+      trixie: b9085a2a9fb2e77f5dda8ed77d5d8b0c2c90edef
+    debian_source_package: null
+  hsflowd:
+    repository: ssh://git@github.com/Arrcus/hsflowd.git
+    github_repository: Arrcus/hsflowd
+    submodule_path: packages/hsflowd
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 2b067a05fc071e74ea5e014255692dadd7889d3b
+      trixie: 2fa133ad8f6177fdf2fb92a3415b2af253a950ce
+    debian_source_package: null
+  ifupdown2:
+    repository: ssh://git@github.com/Arrcus/ifupdown2.git
+    github_repository: Arrcus/ifupdown2
+    submodule_path: packages/ifupdown2
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: c2ef49e652daae2babb0ff28676bc1afedd8508d
+      trixie: 8c191584a8766f192e2f822dd377252be9bfa8f7
+    debian_source_package: null
+  intel-iavf:
+    repository: ssh://git@github.com/Arrcus/intel-iavf.git
+    github_repository: Arrcus/intel-iavf
+    submodule_path: packages/intel-iavf
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor-trixie
+    commits:
+      bookworm: cd4741527efcf156f02dc789369716d0ded4b7c4
+      trixie: 12bced8387a64454458683356e5c5bddff85e34b
+    debian_source_package: null
+  intel-ice:
+    repository: ssh://git@github.com/Arrcus/intel-ice.git
+    github_repository: Arrcus/intel-ice
+    submodule_path: packages/intel-ice
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor-trixie
+    commits:
+      bookworm: c4effa3fb3281e089f1ed6c344746bc43a06525c
+      trixie: a2d572d1fecd302e64dd6c497526065f37f4a354
+    debian_source_package: null
+  iproute2:
+    repository: ssh://git@github.com/Arrcus/iproute2.git
+    github_repository: Arrcus/iproute2
+    submodule_path: packages/iproute2
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 9b3fc90d0fd34102f4217223f12f8ccb96b8fb68
+      trixie: 54f6c4787d5d191116a204c5ec4eff4d6bdaf778
+    debian_source_package: null
+  iputils:
+    repository: ssh://git@github.com/Arrcus/iputils.git
+    github_repository: Arrcus/iputils
+    submodule_path: packages/iputils
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 991673a12674bcd75a90e59117856b2e16a144a8
+      trixie: 545d7396cf4bb1f8cb2bc3460a547ec61aed5725
+    debian_source_package: null
+  libdict:
+    repository: ssh://git@github.com/Arrcus/libdict.git
+    github_repository: Arrcus/libdict
+    submodule_path: packages/libdict
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: d579cd077d84e3fe3c475c15538cff9de822daed
+      trixie: 24f962e9fbe3ef04a4e83b9f51119563fed89547
+    debian_source_package: null
+  libnl3:
+    repository: ssh://git@github.com/arrcus/libnl.git
+    github_repository: arrcus/libnl
+    submodule_path: packages/libnl3
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor-trixie
+    commits:
+      bookworm: 9bd21486e4d4839d8b1e773bd5cbeb4ed5731b36
+      trixie: 090ca746ecc75792ca91640c9b055f9d141b3263
+    debian_source_package: null
+  libnss-mapuser:
+    repository: ssh://git@github.com/Arrcus/libnss-mapuser.git
+    github_repository: Arrcus/libnss-mapuser
+    submodule_path: packages/libnss-mapuser
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 103746bb10cd03ebe0fc175f462c61d331d65918
+      trixie: 918b39807eae09a2c9d24c12b4f1d1d746bd3986
+    debian_source_package: null
+  libpam-radius-auth:
+    repository: ssh://git@github.com/Arrcus/libpam-radius-auth.git
+    github_repository: Arrcus/libpam-radius-auth
+    submodule_path: packages/libpam-radius-auth
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor-trixie
+    commits:
+      bookworm: f5ca1ac68a81a587a36e617803f5d9515becb5d9
+      trixie: f83ff69c8d450690f6d144a87f5e43e9c74a6765
+    debian_source_package: null
+  liburcu:
+    repository: ssh://git@github.com/Arrcus/liburcu.git
+    github_repository: Arrcus/liburcu
+    submodule_path: packages/liburcu
+    releases:
+    - bookworm
+    branches:
+      bookworm: aminor
+    commits:
+      bookworm: 247c6dc8f5600818c244ab56ca4c91e5cb65ba52
+    debian_source_package: null
+  libyang1:
+    repository: ssh://git@github.com/Arrcus/libyang.git
+    github_repository: Arrcus/libyang
+    submodule_path: packages/libyang1
+    releases:
+    - bookworm
+    branches:
+      bookworm: aminor
+    commits:
+      bookworm: 96da4be16357f9756553833533757a28d0973177
+    debian_source_package: null
+  linux:
+    repository: ssh://git@github.com/Arrcus/linux.git
+    github_repository: Arrcus/linux
+    submodule_path: linux
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 647a085909f9f6d660f17925ec720a9f22a891dc
+      trixie: 0934b433cde97f2cf83530aa52729e15d86a9f8d
+    debian_source_package: null
+  lldpd:
+    repository: ssh://git@github.com/Arrcus/lldpd.git
+    github_repository: Arrcus/lldpd
+    submodule_path: packages/lldpd
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: bb31c80732c890a2e3df0be00ad04405f1cbbb18
+      trixie: b51b2d7ba331a341ffc5854b55507075292c1802
+    debian_source_package: null
+  lttng-tools:
+    repository: ssh://git@github.com/Arrcus/lttng-tools.git
+    github_repository: Arrcus/lttng-tools
+    submodule_path: packages/lttng-tools
+    releases:
+    - bookworm
+    branches:
+      bookworm: aminor
+    commits:
+      bookworm: df7c7c7d586e5e544c6019af5acadb6e089e336b
+    debian_source_package: null
+  lttng-ust:
+    repository: ssh://git@github.com/Arrcus/lttng-ust.git
+    github_repository: Arrcus/lttng-ust
+    submodule_path: packages/lttng-ust
+    releases:
+    - bookworm
+    branches:
+      bookworm: aminor
+    commits:
+      bookworm: f5bed392dd8b0352bf0cd2127d5bac63e8d13fc5
+    debian_source_package: null
+  medusa-bootstrap:
+    repository: ssh://git@github.com/Arrcus/medusa-bootstrap.git
+    github_repository: Arrcus/medusa-bootstrap
+    submodule_path: medusa-bootstrap
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: add01b3533d13330dcbd1c4280311e45008c1fad
+      trixie: 25c9de1ddd824955956efdb2fe0df88b414beed9
+    debian_source_package: null
+  medusa-underlay:
+    repository: ssh://git@github.com/Arrcus/medusa-underlay.git
+    github_repository: Arrcus/medusa-underlay
+    submodule_path: packages/medusa-underlay
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 94ead2db07377d291a208e3792f047c366ad2322
+      trixie: 61ae0301358be533b4fe9fda158c37d54de26b03
+    debian_source_package: null
+  mlnx-en:
+    repository: ssh://git@github.com/Arrcus/mlnx-en.git
+    github_repository: Arrcus/mlnx-en
+    submodule_path: packages/mlnx-en
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 7c60ee1c09024a6dab4923cccb029d022e102455
+      trixie: c2e73ddb2bfd3d3e36c9e2f2135f5037c68df554
+    debian_source_package: null
+  mlnx-hw-mgmt:
+    repository: ssh://git@github.com/Arrcus/mlnx-hw-mgmt.git
+    github_repository: Arrcus/mlnx-hw-mgmt
+    submodule_path: packages/mlnx-hw-mgmt
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 7fc41034afe43c0409b0e0ddcc22b53a142b772d
+      trixie: 77d0582f0f758cf1bd742bba65c97434c4034064
+    debian_source_package: null
+  mlnx-sdk:
+    repository: ssh://git@github.com/Arrcus/mlnx_sdk.git
+    github_repository: Arrcus/mlnx_sdk
+    submodule_path: packages/mlnx-sdk
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 90b0eb01ba5731a442fcabb1875b93d4460c418b
+      trixie: 4ab89029be9bd9286fa11f901d9b62a946476a33
+    debian_source_package: null
+  mstpd:
+    repository: ssh://git@github.com/Arrcus/mstpd.git
+    github_repository: Arrcus/mstpd
+    submodule_path: packages/mstpd
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor-trixie
+    commits:
+      bookworm: 457f1b77da8cd3297cb512640694fa20f148ede6
+      trixie: 955653fdb0d09dca5567d85736d4c611f93ab88d
+    debian_source_package: null
+  net-snmp:
+    repository: ssh://git@github.com/Arrcus/net-snmp.git
+    github_repository: Arrcus/net-snmp
+    submodule_path: packages/net-snmp
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor-trixie
+    commits:
+      bookworm: 1d8e12c5df318ccc35ad9cac565860e68de8fb13
+      trixie: b5ce16c28d38b18c4597cad1178636a06a45dff8
+    debian_source_package: null
+  oom:
+    repository: ssh://git@github.com/Arrcus/oom.git
+    github_repository: Arrcus/oom
+    submodule_path: packages/oom
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor-trixie
+    commits:
+      bookworm: 7cf7eb6e5d0f25b3cdd7877b5a979cc94b54a8d6
+      trixie: 34ef44d30f8ee3c14008282fa49564736a600cc0
+    debian_source_package: null
+  openssl:
+    repository: ssh://git@github.com/Arrcus/openssl.git
+    github_repository: Arrcus/openssl
+    submodule_path: packages/openssl
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor-trixie
+    commits:
+      bookworm: b68318495851e5bcfc644c38a7b3dd6fd338e181
+      trixie: 5258da89f22d981875183483285385f67fee30b9
+    debian_source_package: null
+  pyrad:
+    repository: ssh://git@github.com/Arrcus/pyrad.git
+    github_repository: Arrcus/pyrad
+    submodule_path: packages/pyrad
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 3b043f16bb8ed1f0471318d12c4cbdd98da61403
+      trixie: 437a6fc7251d6dcc5c0722cd507e5bb0046d8065
+    debian_source_package: null
+  python-netfilterqueue:
+    repository: ssh://git@github.com/Arrcus/python-netfilterqueue.git
+    github_repository: Arrcus/python-netfilterqueue
+    submodule_path: packages/python-netfilterqueue
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: 810ed9a7e269ef5361ab64465a340413529d9fd1
+      trixie: f5ac4d39baa675894857f264f8066817bf8c7a54
+    debian_source_package: null
+  rsyslog:
+    repository: ssh://git@github.com/Arrcus/rsyslog.git
+    github_repository: Arrcus/rsyslog
+    submodule_path: packages/rsyslog
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor-trixie
+      trixie: aminor-trixie
+    commits:
+      bookworm: 80c1e639f986110d8d1d491ad042b117e538a924
+      trixie: 7932391ddd8b841f45f20e2c05d6005609e52d03
+    debian_source_package: null
+  rtrlib:
+    repository: ssh://git@github.com/Arrcus/rtrlib.git
+    github_repository: Arrcus/rtrlib
+    submodule_path: packages/rtrlib
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor-trixie
+    commits:
+      bookworm: 33b8a9cd62f917ef899e43f6894758e7091c97cd
+      trixie: faed3517fc4a6557dde30af8ce3f0ed140094688
+    debian_source_package: null
+  tacacs_plus:
+    repository: ssh://git@github.com/Arrcus/tacacs_plus.git
+    github_repository: Arrcus/tacacs_plus
+    submodule_path: packages/tacacs_plus
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor-trixie
+    commits:
+      bookworm: 21958d86ed646a99002513840c4b05f63a7b2f96
+      trixie: 9b7d538bb907d6b6ff63a1d793041403b20c52c2
+    debian_source_package: null
+  timing:
+    repository: ssh://git@github.com/Arrcus/timing.git
+    github_repository: Arrcus/timing
+    submodule_path: packages/timing
+    releases:
+    - bookworm
+    - trixie
+    branches:
+      bookworm: aminor
+      trixie: aminor
+    commits:
+      bookworm: f19816144147ce55e9ca416db9c43205af1d22a0
+      trixie: f27d7cf9af7d62503da8bdf078abf044e35ddc16
+    debian_source_package: null
+  ydk-cpp:
+    repository: ssh://git@github.com/Arrcus/ydk-cpp.git
+    github_repository: Arrcus/ydk-cpp
+    submodule_path: packages/ydk-cpp
+    releases:
+    - bookworm
+    branches:
+      bookworm: aminor
+    commits:
+      bookworm: 8163dbe0857bd3d938d6fd23409223ef32ba4a68
+    debian_source_package: null
+  zenoh:
+    repository: ssh://git@github.com/Arrcus/zenoh.git
+    github_repository: Arrcus/zenoh
+    submodule_path: packages/zenoh
+    releases:
+    - bookworm
+    branches:
+      bookworm: aminor
+    commits:
+      bookworm: 20d0b060743cb37364240a69bc62aff80832095e
+    debian_source_package: null
+  zenoh-c:
+    repository: ssh://git@github.com/Arrcus/zenoh-c.git
+    github_repository: Arrcus/zenoh-c
+    submodule_path: packages/zenoh-c
+    releases:
+    - bookworm
+    branches:
+      bookworm: aminor
+    commits:
+      bookworm: 5595bcbd100021ff4984b42bdaec551cbbc6b2df
+    debian_source_package: null

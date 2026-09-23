@@ -1,0 +1,212 @@
+# ARCoS Package Manager - CURATED upstream mappings.
+#
+# Hand-verified decisions. This file always wins over automatic resolution, and
+# regenerating config/packages.yaml never touches it.
+#
+# Every repository below was contacted with `git ls-remote` when it was added;
+# none is a guess. Where a maintenance branch was chosen over the upstream
+# default, the reason says which Debian version drove the choice.
+#
+# Keys per package:
+#   debian_source_package  Debian's name for it, when it differs from the ARCoS
+#                          name. `null` means "deliberately not a Debian package".
+#   repository / ref       The upstream to track.
+#   confidence             high | medium. medium reports as NEEDS_REVIEW, which
+#                          is right when the branch was inferred rather than known.
+#   no_upstream            true when there is provably nothing to track.
+#   category               Overrides classification where the default is wrong.
+#   releases:              Per-release values, layered over the package-wide ones.
+version: 1
+
+packages:
+
+  # --- In Debian, but Debian records no git upstream -------------------------
+  # Both carry a Vcs-Git, but it points at the salsa PACKAGING repo. Their
+  # debian/watch files point at a tarball page and SourceForge respectively, so
+  # no automatic strategy can reach the real code.
+
+  lldpd:
+    repository: https://github.com/lldpd/lldpd.git
+    ref: master
+    confidence: high
+    reason: >-
+      Debian's watch file points at vincent.bernat.ch (tarballs only) and there
+      is no DEP-12 metadata. lldpd.github.io is the project's own page and the
+      code lives in the lldpd GitHub organisation.
+
+  net-snmp:
+    repository: https://github.com/net-snmp/net-snmp.git
+    ref: master
+    confidence: high
+    reason: >-
+      Debian's watch file points at SourceForge, which is where releases are
+      published, not where development happens. Upstream moved to GitHub.
+
+  openssl:
+    repository: https://github.com/openssl/openssl.git
+    ref: master
+    confidence: high
+    reason: >-
+      Homepage is openssl-library.org, a project site rather than a forge, so no
+      automatic strategy resolves it.
+
+  babeltrace:
+    debian_source_package: babeltrace
+    repository: https://github.com/efficios/babeltrace.git
+    ref: stable-1.5
+    confidence: medium
+    reason: >-
+      Debian ships babeltrace 1.5.11 (babeltrace2 is a separate source package),
+      so the 1.x maintenance branch is the matching series. Branch inferred from
+      the Debian version, not confirmed against the ARCoS fork's history.
+
+  liburcu:
+    repository: https://github.com/urcu/userspace-rcu.git
+    ref: stable-0.13
+    confidence: medium
+    reason: >-
+      Debian bookworm ships liburcu 0.13.2, so stable-0.13 is the matching
+      series. Branch inferred from the Debian version.
+
+  # --- Debian names the source package differently than ARCoS names the fork --
+
+  lttng-tools:
+    debian_source_package: ltt-control
+    repository: https://github.com/lttng/lttng-tools.git
+    ref: master
+    confidence: high
+    reason: >-
+      Debian ships this as source package 'ltt-control'. Tracked against the
+      project's own repository rather than the salsa packaging repository, so
+      the comparison shows real upstream work rather than packaging changes.
+
+  lttng-ust:
+    debian_source_package: ust
+    repository: https://github.com/lttng/lttng-ust.git
+    ref: master
+    confidence: high
+    reason: Debian ships this as source package 'ust'.
+
+  python-netfilterqueue:
+    repository: https://github.com/oremanj/python-netfilterqueue.git
+    ref: master
+    confidence: high
+    reason: Present in Debian trixie only; upstream is the author's repository.
+
+  # --- Not Debian packages at all: third-party projects ARCoS forked ---------
+
+  mstpd:
+    debian_source_package: null
+    repository: https://github.com/mstpd/mstpd.git
+    ref: master
+    confidence: high
+    reason: Not packaged in Debian. Upstream is the mstpd organisation.
+
+  rtrlib:
+    debian_source_package: null
+    repository: https://github.com/rtrlib/rtrlib.git
+    ref: master
+    confidence: high
+    reason: Not packaged in Debian bookworm or trixie main.
+
+  hsflowd:
+    debian_source_package: null
+    repository: https://github.com/sflow/host-sflow.git
+    ref: master
+    confidence: high
+    reason: Not in Debian. ARCoS' hsflowd is the sFlow host agent.
+
+  cre2:
+    debian_source_package: null
+    repository: https://github.com/marcomaggi/cre2.git
+    ref: master
+    confidence: high
+    reason: Not in Debian. C wrapper around RE2.
+
+  libdict:
+    debian_source_package: null
+    repository: https://github.com/fmela/libdict.git
+    ref: master
+    confidence: high
+    reason: Not in Debian.
+
+  oom:
+    debian_source_package: null
+    repository: https://github.com/opencomputeproject/oom.git
+    ref: master
+    confidence: high
+    reason: Not in Debian. Open Optical Monitoring, an OCP project.
+
+  tacacs_plus:
+    debian_source_package: null
+    repository: https://github.com/ansible/tacacs_plus.git
+    ref: master
+    confidence: high
+    reason: Not in Debian.
+
+  ydk-cpp:
+    debian_source_package: null
+    repository: https://github.com/CiscoDevNet/ydk-cpp.git
+    ref: master
+    confidence: high
+    reason: Not in Debian.
+
+  ctypesgen:
+    debian_source_package: null
+    repository: https://github.com/ctypesgen/ctypesgen.git
+    ref: master
+    confidence: high
+    reason: Not in Debian bookworm/trixie main.
+
+  zenoh:
+    debian_source_package: null
+    repository: https://github.com/eclipse-zenoh/zenoh.git
+    ref: main
+    confidence: high
+    reason: Not in Debian. Eclipse zenoh.
+
+  zenoh-c:
+    debian_source_package: null
+    repository: https://github.com/eclipse-zenoh/zenoh-c.git
+    ref: main
+    confidence: high
+    reason: Not in Debian. C binding for Eclipse zenoh.
+
+  libyang1:
+    debian_source_package: null
+    repository: https://github.com/CESNET/libyang.git
+    ref: libyang1
+    confidence: high
+    reason: >-
+      Debian bookworm ships libyang2 (2.1.30), a different major series, so it is
+      not the counterpart of ARCoS' libyang1. Upstream keeps a libyang1 branch
+      for the 1.x series, which is the matching tree.
+
+  ONL-standalone:
+    debian_source_package: null
+    repository: https://github.com/opencomputeproject/OpenNetworkLinux.git
+    ref: ONLPv2
+    confidence: medium
+    reason: >-
+      Not in Debian. ARCoS tracks the ONLPv2 branch rather than master. Branch
+      taken from ARCoS' own release configuration, not confirmed by merge-base.
+
+  ONL-xc:
+    debian_source_package: null
+    repository: https://github.com/opencomputeproject/OpenNetworkLinux.git
+    ref: ONLPv2
+    confidence: medium
+    reason: >-
+      Same upstream as ONL-standalone; ARCoS keeps a second fork on branch
+      aminor-xc for the XC platform.
+
+  # --- Looked for, provably nothing to track --------------------------------
+
+  libnss-mapuser:
+    debian_source_package: null
+    no_upstream: true
+    category: third_party
+    reason: >-
+      Originally a Cumulus Networks package. Not in Debian, and no public
+      repository exists under CumulusNetworks on GitHub following the NVIDIA
+      acquisition. Recorded as searched-and-absent rather than left unresolved.

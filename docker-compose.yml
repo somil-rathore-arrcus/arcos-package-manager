@@ -1,0 +1,36 @@
+# Local development and single-host deployment.
+#
+# Only the frontend publishes a port; the backend is reachable through it, so
+# there is one origin and no CORS configuration to get wrong.
+services:
+  backend:
+    build:
+      context: .
+      args:
+        APP_UID: ${APM_UID:-10001}
+    env_file: [.env]
+    environment:
+      APM_CACHE_DIR: /var/cache/arcos-package-manager
+      APM_WORKSPACE_DIR: /var/tmp/arcos-package-manager
+    volumes:
+      - ./config:/app/config:ro
+      - apm-cache:/var/cache/arcos-package-manager
+      - apm-workspace:/var/tmp/arcos-package-manager
+      # Read-only SSH material for the bridge. Defaults to /dev/null so the
+      # stack still starts when no bridge is configured.
+      - ${APM_SSH_IDENTITY_FILE:-/dev/null}:/home/apm/.ssh/id_bridge:ro
+      - ${APM_SSH_KNOWN_HOSTS_FILE:-/dev/null}:/home/apm/.ssh/known_hosts:ro
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "${APM_PORT:-8080}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  apm-cache:
+  apm-workspace:
