@@ -12,6 +12,7 @@ second comparison of a package costs a fetch rather than a clone.
 
 from __future__ import annotations
 
+import base64
 import logging
 import re
 import shlex
@@ -126,19 +127,25 @@ class GitWorkspace:
         )
 
     def fetch(self, name: str, url: str, ref: str,
-              blobless: bool = True) -> GitResult:
+              blobless: bool = True, depth: Optional[int] = None) -> GitResult:
         """Fetch one ref into FETCH_HEAD and a local tracking ref.
 
         Blobless by default: the commit graph is what comparison needs, and it is
         a fraction of the download. Blobs are fetched on demand when a diff or a
         patch-id actually requires them.
+
+        `depth` limits history as well, for callers that only build on the tip:
+        committing one file on top of the linux fork needs its tip tree, not
+        twenty years of commits.
         """
         self.set_remote(name, url)
         filters = "--filter=blob:none " if blobless else ""
+        shallow = f"--depth {int(depth)} " if depth else ""
         local = f"refs/apm/{name}"
         spec = f"+{ref}:{local}" if not _looks_like_sha(ref) else ref
         result = self._run(
-            f"fetch -q --no-tags {filters}{shlex.quote(name)} {shlex.quote(spec)}",
+            f"fetch -q --no-tags {shallow}{filters}{shlex.quote(name)} "
+            f"{shlex.quote(spec)}",
             timeout=self.long_timeout,
             check=False,
             label="fetch",
@@ -147,7 +154,8 @@ class GitWorkspace:
             # Not every server supports partial clone; retry complete.
             log.info("blobless fetch failed for %s; retrying in full", url)
             result = self._run(
-                f"fetch -q --no-tags {shlex.quote(name)} {shlex.quote(spec)}",
+                f"fetch -q --no-tags {shallow}{shlex.quote(name)} "
+                f"{shlex.quote(spec)}",
                 timeout=self.long_timeout,
                 check=False,
                 label="fetch",
@@ -197,9 +205,9 @@ class GitWorkspace:
         return result
 
     def fetch_side(self, name: str, url: str, ref: str,
-                   blobless: bool = True) -> str:
+                   blobless: bool = True, depth: Optional[int] = None) -> str:
         """Fetch a side and return the commit it resolves to."""
-        result = self.fetch(name, url, ref, blobless=blobless)
+        result = self.fetch(name, url, ref, blobless=blobless, depth=depth)
         if not result.ok:
             raise GitWorkspaceError(
                 f"could not fetch {ref} from {url}", result.stderr.strip(),
@@ -337,11 +345,13 @@ class GitWorkspace:
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
     def write_file(self, relative_path: str, content: str) -> None:
+        """Write exactly `content`. Sent base64-encoded: a heredoc added a
+        newline of its own, and quoting would have to survive two shells."""
         directory = relative_path.rsplit("/", 1)[0] if "/" in relative_path else "."
-        heredoc = "APM_CONTENT_EOF"
         self.shell(
             f"mkdir -p {shlex.quote(directory)} && "
-            f"cat > {shlex.quote(relative_path)} <<'{heredoc}'\n{content}\n{heredoc}",
+            f"printf %s {shlex.quote(_b64(content))} | base64 -d > "
+            f"{shlex.quote(relative_path)}",
             check=True,
         )
 
@@ -353,6 +363,9 @@ class GitWorkspace:
         return result.stdout if result.ok else None
 
     def commit_all(self, message: str) -> Optional[str]:
+        """Commit everything in the working tree. For cherry-picks only: it
+        stages whatever is there, so a change that must be one file uses
+        commit_file_on instead."""
         self._run("add -A", label="add")
         result = self._run(
             f"-c user.name={shlex.quote(self.committer_name)} "
@@ -373,6 +386,123 @@ class GitWorkspace:
             f"{shlex.quote('HEAD')}:{shlex.quote('refs/heads/' + branch)}",
             timeout=self.long_timeout, check=False, label="push",
         )
+
+
+    # -- proposing one file ------------------------------------------------
+    #
+    # Everything below works on objects, never on a checkout. No branch is
+    # created locally, no working tree is written, and the commit is built from
+    # the base tree plus exactly one entry - so it cannot carry another file,
+    # and nothing here can move the branch it was built on.
+
+    def remote_ref(self, url: str, ref: str) -> Optional[str]:
+        """The commit `ref` names on the remote, or None when it does not exist.
+
+        Raises when the remote cannot be asked: "no such branch" and "could not
+        connect" lead to opposite decisions, so they must not look alike.
+        """
+        result = self._run(
+            f"ls-remote {shlex.quote(url)} {shlex.quote(ref)}",
+            timeout=self.long_timeout, check=False, label="ls-remote",
+        )
+        if not result.ok:
+            raise GitWorkspaceError(
+                f"could not list {ref} on {url}", result.stderr.strip(),
+                timed_out=_is_timeout(result.stderr),
+            )
+        for line in result.stdout.splitlines():
+            sha, _, name = line.partition("\t")
+            if name.strip() == ref:
+                return sha.strip()
+        return None
+
+    def path_exists(self, rev: str, relative_path: str) -> bool:
+        """Whether `rev` has a file at `relative_path`. Reads trees only."""
+        result = self._run(
+            f"ls-tree --name-only {shlex.quote(rev)} -- "
+            f"{shlex.quote(relative_path)}",
+            label="ls-tree",
+        )
+        return bool(result.text)
+
+    def commit_file_on(self, base: str, relative_path: str, content: str,
+                       message: str, author_name: str,
+                       author_email: str) -> str:
+        """A new commit whose parent is `base` and whose tree is `base`'s tree
+        with `relative_path` set to `content`. Returns its SHA.
+
+        Uses a private index file, so a stray file in the workspace - or an
+        index left behind by anything else - cannot reach the commit. The tree
+        is written with --missing-ok because a blobless fetch holds the base
+        tree's entries by name only; the server has every one of them.
+        """
+        identity = " ".join(
+            f"{key}={shlex.quote(value)}" for key, value in (
+                ("GIT_AUTHOR_NAME", author_name),
+                ("GIT_AUTHOR_EMAIL", author_email),
+                ("GIT_COMMITTER_NAME", author_name),
+                ("GIT_COMMITTER_EMAIL", author_email),
+            )
+        )
+        script = (
+            # git refuses an empty index file, so only the name is reserved.
+            "IDX=$(mktemp .git/apm-index.XXXXXX) || exit 97\n"
+            'rm -f "$IDX"\n'
+            "trap 'rm -f \"$IDX\"' EXIT\n"
+            'export GIT_INDEX_FILE="$IDX"\n'
+            f"git read-tree {shlex.quote(base)} || exit 1\n"
+            f"BLOB=$(printf %s {shlex.quote(_b64(content))} | base64 -d | "
+            f"git hash-object -w --stdin) || exit 1\n"
+            f'git update-index --add --cacheinfo 100644,"$BLOB",'
+            f"{shlex.quote(relative_path)} || exit 1\n"
+            "TREE=$(git write-tree --missing-ok) || exit 1\n"
+            f"printf %s {shlex.quote(_b64(message))} | base64 -d | "
+            f'env {identity} git commit-tree "$TREE" -p {shlex.quote(base)}\n'
+        )
+        result = self.shell(script, timeout=self.long_timeout)
+        sha = result.text
+        if not result.ok or not _looks_like_sha(sha):
+            raise GitWorkspaceError(
+                f"could not build a commit for {relative_path}",
+                result.stderr.strip(),
+            )
+        return sha
+
+    def changed_paths(self, a: str, b: str) -> List[str]:
+        """Every path that differs between two commits. Reads trees only."""
+        result = self._run(
+            f"diff-tree -r --no-commit-id --name-only {shlex.quote(a)} "
+            f"{shlex.quote(b)}",
+            label="diff-tree",
+        )
+        return [line for line in result.stdout.splitlines() if line.strip()]
+
+    def diff_check(self, a: str, b: str) -> str:
+        """`git diff --check` between two commits: empty when whitespace-clean."""
+        result = self._run(
+            f"diff --check {shlex.quote(a)} {shlex.quote(b)}",
+            check=False, label="diff --check",
+        )
+        return (result.stdout + result.stderr).strip()
+
+    def push_commit(self, url: str, sha: str, branch: str) -> GitResult:
+        """Create `branch` on the remote at `sha`. Never forced.
+
+        The destination is spelled out in full, so this can only ever write
+        refs/heads/<branch>. An existing branch that is not an ancestor of
+        `sha` rejects the push rather than being replaced.
+        """
+        if not branch or not _looks_like_sha(sha):
+            raise GitWorkspaceError(f"refusing to push {sha!r} to {branch!r}")
+        return self._run(
+            f"push -q {shlex.quote(url)} "
+            f"{shlex.quote(sha + ':refs/heads/' + branch)}",
+            timeout=self.long_timeout, check=False, label="push",
+        )
+
+
+def _b64(text: str) -> str:
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
 def _is_timeout(stderr: str) -> bool:

@@ -138,13 +138,29 @@ def test_the_plan_describes_work_that_has_not_been_done(tmp_path):
     assert payload["pushed"] is False
     assert payload["pull_requests_created"] is False
     entry = payload["entries"][0]
-    assert entry["branch"] == "upstream-metadata/iputils"
+    assert entry["branch"] == "upstream-metadata/bookworm/iputils"
     assert entry["base_branch"] == "aminor"
-    assert entry["commit_message"] == "docs: add upstream metadata"
+    assert entry["commit_message"] == (
+        "iputils: add debian/upstream.md with verified upstream"
+    )
     assert entry["path"] == "debian/upstream.md"
 
     readable = written["markdown"].read_text()
     assert "no pull request was opened" in readable.lower()
+
+
+def test_the_plan_hashes_the_exact_bytes_it_wrote(tmp_path):
+    import hashlib
+
+    service = _service()
+    result = service.run([_resolution()], "bookworm", tmp_path / "md")
+    entry = json.loads(
+        service.write_plan(result, tmp_path)["json"].read_text()
+    )["entries"][0]
+
+    data = (tmp_path / "md" / "iputils" / "debian" / "upstream.md").read_bytes()
+    assert entry["sha256"] == hashlib.sha256(data).hexdigest()
+    assert entry["bytes"] == len(data)
 
 
 def test_only_the_named_release_is_generated(tmp_path):

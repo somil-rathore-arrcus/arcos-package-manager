@@ -13,19 +13,20 @@ from fastapi.testclient import TestClient
 from apm.api import deps
 from apm.api.main import create_app
 from apm.domain.enums import (
-    CommitClass, Criticality, ErrorCode, PreviewOutcome, ResolutionMethod,
-    ResolutionMode, ResolutionStatus, UpstreamMdOutcome,
+    CommitClass, Criticality, ErrorCode, PreviewOutcome, PublishStatus,
+    ResolutionMethod, ResolutionMode, ResolutionStatus, UpstreamMdOutcome,
 )
 from apm.domain.models import (
     Branch, CherryPickPreview, CherryPickResult, CommitInfo, ComparisonResult,
     ComparisonSummary, CriticalityAssessment, DebianRelease, Package,
-    PullRequest, Repository, ResolutionEvidence, UpstreamMdDocument,
-    UpstreamResolution,
+    PublishResult, PullRequest, Repository, ResolutionEvidence,
+    UpstreamMdDocument, UpstreamResolution,
 )
 from apm.services.comparison_service import ComparisonError
 from apm.services.metadata_batch_service import MetadataBatchService
 from apm.services.github_service import GitHubError
 from apm.services.patch_service import PatchError
+from apm.services.upstream_md_publisher import validate_branch
 from apm.services.upstream_service import UpstreamServiceError
 
 
@@ -94,6 +95,10 @@ class FakeUpstream:
             raise UpstreamServiceError(ErrorCode.NOT_FOUND, "No package 'nope'.")
         out = RESOLUTION.model_copy(deep=True)
         out.package = package
+        if package == "babeltrace":
+            out.status = ResolutionStatus.NEEDS_REVIEW
+        if package == "arcapi":
+            out.status = ResolutionStatus.NO_UPSTREAM
         return out
 
     def resolve_manual(self, package, release, repository, ref, arcos_branch=None):
@@ -163,7 +168,35 @@ class FakeGitHub:
         return PullRequest(number=number, url=f"https://github.com/o/r/pull/{number}")
 
 
+class FakePublisher:
+    """Records what the route asked for; the real publisher has its own tests."""
+
+    def __init__(self):
+        self.calls = []
+        self.preflights = []
+
+    def preflight(self, slugs):
+        self.preflights.append(list(slugs))
+
+    def publish(self, target, *, apply, draft=False, title_prefix="",
+                branch=None, prior=None):
+        validate_branch(branch or "upstream-metadata/bookworm/x", target.base_branch)
+        self.calls.append({"package": target.package, "apply": apply,
+                           "branch": branch, "content": target.content})
+        return PublishResult(
+            package=target.package, release=target.release,
+            status=PublishStatus.PR_OPENED if apply else PublishStatus.DRY_RUN_OK,
+            repository=target.slug, base_branch=target.base_branch,
+            branch=branch or f"upstream-metadata/bookworm/{target.package}",
+            pull_request=PullRequest(number=1, url="https://github.com/o/r/pull/1")
+            if apply else None,
+        )
+
+
 class FakeUpstreamMd:
+    def render(self, resolution):
+        return "# pyrad\n"
+
     def generate(self, resolution, existing=None):
         return UpstreamMdDocument(
             package=resolution.package, debian_release=resolution.debian_release,
@@ -201,6 +234,7 @@ class FakeContainer:
         self.metadata_batch = MetadataBatchService(
             self.upstream_md, workspaces=self.workspaces
         )
+        self.publisher = FakePublisher()
 
     def capabilities(self):
         return {"create_pull_requests": self.github.can_create_pull_requests}
@@ -378,6 +412,69 @@ def test_upstream_md_pr_requires_confirmation(app_container):
     client, _ = app_container
     response = client.post("/api/upstream-md/pr", json={
         "package": "pyrad", "release": "bookworm", "confirm": False,
+    })
+    assert response.status_code == 400
+
+
+@pytest.fixture
+def md_out(tmp_path, monkeypatch):
+    from apm.api.routes import upstream_md as md_route
+
+    monkeypatch.setattr(md_route, "OUT_DIR", tmp_path)
+    return tmp_path
+
+
+def test_upstream_md_pr_goes_through_the_publisher_and_is_recorded(
+        app_container, md_out):
+    client, fake = app_container
+    body = client.post("/api/upstream-md/pr", json={
+        "package": "pyrad", "release": "bookworm", "confirm": True,
+    }).json()
+    assert body["status"] == "PR_OPENED"
+    assert body["pull_request"]["url"] == "https://github.com/o/r/pull/1"
+    assert fake.publisher.preflights == [["Arrcus/pyrad"]]
+    assert fake.publisher.calls == [{"package": "pyrad", "apply": True,
+                                     "branch": None, "content": "# pyrad\n"}]
+
+    listed = client.get("/api/upstream-md/prs", params={"release": "bookworm"})
+    assert [e["package"] for e in listed.json()] == ["pyrad"]
+
+
+def test_upstream_md_dry_run_needs_no_confirmation_and_records_nothing(
+        app_container, md_out):
+    client, fake = app_container
+    body = client.post("/api/upstream-md/pr", json={
+        "package": "pyrad", "release": "bookworm", "dry_run": True,
+    }).json()
+    assert body["status"] == "DRY_RUN_OK"
+    assert fake.publisher.calls[0]["apply"] is False
+    assert fake.publisher.preflights == []
+    assert client.get("/api/upstream-md/prs").json() == []
+
+
+@pytest.mark.parametrize("package", ["babeltrace", "arcapi"])
+def test_upstream_md_pr_refuses_unverified_mappings(app_container, md_out, package):
+    client, fake = app_container
+    response = client.post("/api/upstream-md/pr", json={
+        "package": package, "release": "bookworm", "confirm": True,
+    })
+    assert response.status_code == 400
+    assert fake.publisher.calls == []
+
+
+def test_upstream_md_pr_refuses_the_target_branch(app_container, md_out):
+    client, _ = app_container
+    response = client.post("/api/upstream-md/pr", json={
+        "package": "pyrad", "release": "bookworm", "confirm": True,
+        "branch_name": "aminor",
+    })
+    assert response.status_code == 400
+
+
+def test_upstream_md_generation_for_no_upstream_is_a_400_not_a_500(app_container):
+    client, _ = app_container
+    response = client.post("/api/upstream-md/generate", json={
+        "package": "arcapi", "release": "bookworm",
     })
     assert response.status_code == 400
 

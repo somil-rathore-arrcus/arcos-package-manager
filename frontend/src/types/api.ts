@@ -193,6 +193,32 @@ export interface PatchRequest {
 
 export type PreviewOutcome = "CLEAN" | "CONFLICT" | "EMPTY" | "FAILED"
 
+export interface PublishResult {
+  package: string
+  release: string
+  status: PublishStatus
+  /** owner/name on GitHub */
+  repository: string
+  base_branch: string
+  branch: string
+  /** The commit the release manifest pins. */
+  pinned_commit: string | null
+  /** The target branch tip the commit was built on. */
+  base_sha: string | null
+  /** The target branch has moved past the pinned commit. */
+  base_moved: boolean
+  outcome: UpstreamMdOutcome | null
+  commit: string | null
+  pushed: boolean
+  title: string
+  pull_request: PullRequest | null
+  error: string | null
+  diff: string | null
+  updated_at: string | null
+}
+
+export type PublishStatus = "DRY_RUN_OK" | "PR_OPENED" | "PR_EXISTS" | "PR_MERGED" | "PR_CLOSED" | "NO_CHANGE" | "SKIPPED_NO_UPSTREAM" | "SKIPPED_NEEDS_REVIEW" | "SKIPPED_EXCLUDED" | "CONFLICT" | "DRIFT" | "BRANCH_EXISTS" | "BASE_UNREADABLE" | "PUSH_FAILED" | "PR_FAILED" | "ERROR"
+
 export interface PullRequest {
   number?: number | null
   url?: string | null
@@ -280,8 +306,11 @@ export interface UpstreamMdPrRequest {
   package: string
   release: string
   arcos_branch?: string | null
+  /** Must be under upstream-metadata/ and not the target branch. */
   branch_name?: string | null
   draft?: boolean
+  /** Build and check the exact commit, then stop: nothing is pushed and no pull request is opened. */
+  dry_run?: boolean
   /** Must be true. Opening a pull request is an explicit act, never a side effect of generating the file. */
   confirm?: boolean
 }

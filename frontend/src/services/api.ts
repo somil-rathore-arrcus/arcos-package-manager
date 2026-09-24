@@ -7,7 +7,7 @@
 import type {
   Branch, CherryPickPreview, CherryPickRequest, CherryPickResult,
   ComparisonRequest, ComparisonResult, DebianRelease, HealthResponse,
-  ManualUpstreamRequest, Package, PullRequest, PullRequestRequest,
+  ManualUpstreamRequest, Package, PublishResult, PullRequest, PullRequestRequest,
   ReportFile, ResolutionEvidence, UpstreamMdDocument, UpstreamMdPrRequest,
   UpstreamMdRequest, UpstreamResolution,
 } from '../types/api'
@@ -144,8 +144,11 @@ export const api = {
   generateUpstreamMd: (body: UpstreamMdRequest) =>
     post<UpstreamMdDocument>('/upstream-md/generate', body),
 
+  // Returns what the publisher did; `pull_request` is set only when a PR is
+  // open. Anything else (NO_CHANGE, CONFLICT, BRANCH_EXISTS...) is a result for
+  // a person to read, not an HTTP error.
   createUpstreamMdPr: (body: UpstreamMdPrRequest) =>
-    post<PullRequest>('/upstream-md/pr', body),
+    post<PublishResult>('/upstream-md/pr', body, SLOW_TIMEOUT_MS),
 
   reports: () => request<ReportFile[]>('/reports'),
 }

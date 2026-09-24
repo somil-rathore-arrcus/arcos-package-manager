@@ -85,6 +85,19 @@ class Settings:
         """
         return list(self.raw.get("private_repository_patterns", []))
 
+    @property
+    def upstream_md_publish(self) -> dict:
+        """Branch template, exclusions and ordering for publish-upstream-md."""
+        block = self.raw.get("upstream_md_publish", {}) or {}
+        return {
+            "branch_template": block.get("branch_template", ""),
+            "exclude": {
+                str(k): " ".join(str(v or "excluded in settings.yaml").split())
+                for k, v in (block.get("exclude") or {}).items()
+            },
+            "defer": list(block.get("defer") or []),
+        }
+
     def is_vendor(self, name: str) -> bool:
         patterns = self.raw.get("classification", {}).get("vendor_patterns", [])
         return any(re.search(p, name) for p in patterns)

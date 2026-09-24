@@ -100,6 +100,50 @@ class UpstreamMdOutcome(str, Enum):
     CONFLICT = "CONFLICT"
 
 
+class PublishStatus(str, Enum):
+    """What happened when one package's debian/upstream.md was proposed.
+
+    Anything that stops for a human - a hand-written file, a branch someone else
+    owns, a closed PR, a file that no longer matches the plan - is its own
+    status, so a batch summary says what needs looking at rather than "failed".
+    """
+
+    DRY_RUN_OK = "DRY_RUN_OK"
+    PR_OPENED = "PR_OPENED"
+    PR_EXISTS = "PR_EXISTS"
+    PR_MERGED = "PR_MERGED"
+    PR_CLOSED = "PR_CLOSED"
+    NO_CHANGE = "NO_CHANGE"
+    SKIPPED_NO_UPSTREAM = "SKIPPED_NO_UPSTREAM"
+    SKIPPED_NEEDS_REVIEW = "SKIPPED_NEEDS_REVIEW"
+    SKIPPED_EXCLUDED = "SKIPPED_EXCLUDED"
+    CONFLICT = "CONFLICT"
+    DRIFT = "DRIFT"
+    BRANCH_EXISTS = "BRANCH_EXISTS"
+    BASE_UNREADABLE = "BASE_UNREADABLE"
+    PUSH_FAILED = "PUSH_FAILED"
+    PR_FAILED = "PR_FAILED"
+    ERROR = "ERROR"
+
+    @property
+    def is_done(self) -> bool:
+        """A PR is open or merged; re-running should not touch it again."""
+        return self in (
+            PublishStatus.PR_OPENED, PublishStatus.PR_EXISTS,
+            PublishStatus.PR_MERGED,
+        )
+
+    @property
+    def is_retryable(self) -> bool:
+        return self in (
+            PublishStatus.PUSH_FAILED, PublishStatus.PR_FAILED, PublishStatus.ERROR,
+        )
+
+    @property
+    def is_failure(self) -> bool:
+        return self.is_retryable
+
+
 class ErrorCode(str, Enum):
     """Failure states the UI is expected to render differently."""
 

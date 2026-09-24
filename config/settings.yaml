@@ -105,3 +105,21 @@ ancestry:
 # deployment with direct access can clear it without editing this file.
 private_repository_patterns:
   - "github\\.com[:/]+arrcus/"
+
+# apm publish-upstream-md: proposing debian/upstream.md to each package.
+upstream_md_publish:
+  # Every branch this workflow creates lives under upstream-metadata/; the
+  # publisher refuses any other name, and any name equal to the target branch.
+  branch_template: "upstream-metadata/{release}/{package}"
+  # Packages never proposed, with the reason recorded in the results ledger.
+  exclude:
+    ONL-standalone: >-
+      Arrcus/onl-testbed has no debian/ directory; where the file belongs is
+      awaiting a decision
+    ONL-xc: >-
+      Arrcus/onl-testbed has no debian/ directory; where the file belongs is
+      awaiting a decision
+  # Large repositories, processed after everything else.
+  defer:
+    - openssl
+    - linux

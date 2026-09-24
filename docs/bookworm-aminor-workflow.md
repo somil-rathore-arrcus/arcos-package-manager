@@ -143,18 +143,67 @@ The same command writes `out/upstream-md-plan-bookworm.json` and a readable
 `.md` beside it:
 
 - base branch: the branch the release manifest names (`aminor`)
-- new branch: `upstream-metadata/<package>`
-- commit message: `docs: add upstream metadata`
-- the diff, where there is one
+- new branch: `upstream-metadata/bookworm/<package>`
+- commit message: `<package>: add debian/upstream.md with verified upstream`
+- the SHA-256 and size of each generated file, and the diff where there is one
 
-Nothing is pushed, no branch is created and no pull request is opened. The
+Generating pushes nothing, creates no branch and opens no pull request; the
 plan's JSON says so in `"pushed": false` and `"pull_requests_created": false`.
-No GitHub token is needed for any of this, and the dashboard shows **Read-only
-mode — GitHub write operations disabled** until one is configured.
 
-When write operations are enabled later, `POST /api/upstream-md/pr` performs the
-push and the PR for a single package, and requires `confirm: true`. The target
-branch is never committed to: the file always lands on a new branch.
+## 4a. Proposing the files — `apm publish-upstream-md`
+
+Once the plan and the files are reviewed:
+
+```bash
+# Dry run (the default): every read, and the exact commit, but no push.
+apm publish-upstream-md --release bookworm --package mstpd --show-diff
+
+# One package for real.
+apm publish-upstream-md --release bookworm --package mstpd --apply --confirm mstpd
+
+# The rest, after the first PR has been reviewed.
+apm publish-upstream-md --release bookworm --all --apply --confirm-count 26
+```
+
+For each package the publisher:
+
+1. Checks that the file still hashes to the plan's SHA-256 and still renders
+   from today's mapping. If not, the package is `DRIFT`: regenerate and review.
+2. Reads the live tip of the target branch, and whether
+   `upstream-metadata/<release>/<package>` already exists.
+3. Fetches that tip (depth 1, blobless) into a scratch workspace on the bridge
+   and compares the existing `debian/upstream.md`: `NO_CHANGE`, `CONFLICT` for
+   a file this tool did not write, otherwise `CREATED` or `UPDATED`.
+4. Builds the commit from objects: the tip's tree plus exactly one entry. No
+   branch is checked out, and nothing else can reach the commit. It checks
+   that the changed paths are exactly `debian/upstream.md`, that `git diff
+   --check` is clean, and that the parent is the tip. **A dry run stops here.**
+5. Pushes `<commit>:refs/heads/upstream-metadata/<release>/<package>`, never
+   forced.
+6. Opens the pull request against the target branch. The body carries the
+   `Problem Description :`, `Root Cause :` and `Fix Details :` sections that
+   ARCoS CI requires.
+7. Records the result in `out/upstream-md-pr-results-bookworm.json` and `.md`
+   before moving to the next package.
+
+What it never does: write to the target branch, force-push, merge, commit a
+second file, replace a hand-written file, or propose a `NEEDS_REVIEW` or
+`NO_UPSTREAM` package. Packages listed under `upstream_md_publish.exclude` in
+`config/settings.yaml` (currently the two ONL packages, whose repository has no
+`debian/`) are recorded as `SKIPPED_EXCLUDED`.
+
+A failure in one package is recorded and the run continues; three consecutive
+failures stop it, because that usually means the token or the bridge.
+Re-running resumes from the ledger: packages with an open PR are left alone,
+`--retry-failed` re-runs only failures, and a branch this run pushed but could
+not open a PR for goes straight to the PR step. A branch this tool has no record
+of creating is `BRANCH_EXISTS` and is left alone, and a closed PR is `PR_CLOSED`
+and is not re-proposed.
+
+`scripts/verify_pr_ledger.py` checks the ledger afterwards.
+`POST /api/upstream-md/pr` runs the same publisher for one package, with
+`confirm: true`, or `dry_run: true`. `GET /api/upstream-md/prs` returns the
+ledger.
 
 ## 5. The dashboard
 
@@ -169,10 +218,10 @@ rendered from in the same run — so the two cannot disagree.
 
 ## What this workflow does not do
 
-- It does not push, open pull requests or modify any remote repository.
-- It does not write into the real package repositories; generated files stay
-  under `out/`.
-- It does not ask for a GitHub token.
+- Generation does not push, open pull requests or modify any remote repository,
+  and does not ask for a GitHub token. Only `publish-upstream-md --apply` (or
+  the confirmed API call) writes, and only to `upstream-metadata/` branches.
+- It never commits to a target branch, force-pushes or merges.
 - It does not guess a branch, hard-code a package list or carry a hand-written
   upstream mapping. Curated entries live in `config/overrides.yaml`, are
   declared as curated, and are still checked by the ancestry probe.

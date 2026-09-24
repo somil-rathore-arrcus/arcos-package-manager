@@ -69,7 +69,7 @@ export function mockApi(overrides: Overrides = {}) {
       return pick(overrides.upstreamMd, fx.upstreamMd)
     }
     if (path.startsWith('/upstream-md/pr')) {
-      return pick(overrides.upstreamMdPr, fx.pullRequest)
+      return pick(overrides.upstreamMdPr, fx.upstreamMdPublish)
     }
     if (path.startsWith('/reports')) return pick(overrides.reports, fx.reports)
     return respond({ code: 'NOT_FOUND', message: `no stub for ${path}` }, 404)

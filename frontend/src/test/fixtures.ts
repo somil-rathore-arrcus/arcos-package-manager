@@ -1,6 +1,7 @@
 import type {
   Branch, CherryPickPreview, CherryPickResult, CommitInfo, ComparisonResult,
-  DebianRelease, HealthResponse, Package, PullRequest, UpstreamMdDocument,
+  DebianRelease, HealthResponse, Package, PublishResult, PullRequest,
+  UpstreamMdDocument,
   UpstreamResolution,
 } from '../types/api'
 
@@ -179,6 +180,20 @@ export const pullRequest: PullRequest = {
   number: 42, url: 'https://github.com/Arrcus/pyrad/pull/42', state: 'open',
   title: 'pyrad: pull 1 upstream commit', body: '', base: 'aminor',
   head: 'upstream/pyrad/20260923-000000', draft: false, already_existed: false,
+}
+
+export const upstreamMdPublish: PublishResult = {
+  package: 'pyrad', release: 'bookworm', status: 'PR_OPENED',
+  repository: 'Arrcus/pyrad', base_branch: 'aminor',
+  branch: 'upstream-metadata/bookworm/pyrad', pinned_commit: '3b043f16bb8e',
+  base_sha: '3'.repeat(40), base_moved: false, outcome: 'CREATED',
+  commit: 'c'.repeat(40), pushed: true,
+  title: 'pyrad: add debian/upstream.md with verified upstream',
+  pull_request: {
+    ...pullRequest, url: 'https://github.com/Arrcus/pyrad/pull/43',
+    head: 'upstream-metadata/bookworm/pyrad',
+  },
+  error: null, diff: null, updated_at: null,
 }
 
 export const upstreamMd: UpstreamMdDocument = {

@@ -23,6 +23,7 @@ from .mapping_store import MappingStore
 from .metadata_batch_service import MetadataBatchService
 from .patch_id_service import PatchIdService
 from .patch_service import PatchService
+from .upstream_md_publisher import BRANCH_TEMPLATE, UpstreamMdPublisher
 from .upstream_md_service import UpstreamMdService
 from .upstream_service import UpstreamService
 
@@ -83,6 +84,15 @@ class Container:
             api_url=self.environment.github_api_url,
             timeout=self.environment.http_timeout,
         )
+        publish = self.settings.upstream_md_publish
+        self.publisher = UpstreamMdPublisher(
+            self.workspaces, self.github,
+            author_name=self.environment.committer_name,
+            author_email=self.environment.committer_email,
+            branch_template=publish["branch_template"] or BRANCH_TEMPLATE,
+            exclude=publish["exclude"],
+            defer=publish["defer"],
+        )
 
     def capabilities(self) -> dict:
         """What this deployment can actually do, so the UI can say so up front."""
@@ -102,10 +112,11 @@ class Container:
 
 
 def _private_hint(settings) -> str:
-    """A URL that matches the private patterns, used to pick the workspace host."""
-    patterns = settings.private_repository_patterns
-    if patterns and "github" in patterns[0]:
-        return "ssh://git@github.com/arrcus/placeholder.git"
+    """A URL that matches the private patterns, used to pick the workspace host.
+
+    Workspaces live on whichever host can reach the ARCoS forks, and every fork
+    is under github.com/arrcus, so one representative URL is enough.
+    """
     return "ssh://git@github.com/arrcus/placeholder.git"
 
 

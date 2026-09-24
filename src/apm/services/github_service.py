@@ -89,13 +89,51 @@ class GitHubService:
 
     # -- reads -------------------------------------------------------------
 
-    def find_pull_request(self, slug: str, head_branch: str,
-                          base: str) -> Optional[PullRequest]:
-        """An already-open PR for this branch, so retrying does not duplicate it."""
+    def get_repository(self, slug: str) -> dict:
+        """The repository as the token sees it. Used before any push, so a token
+        that cannot open a PR fails the run before a branch is left behind."""
+        self._require_token()
+        response = self._request("GET", f"/repos/{slug}")
+        if response.status_code == 200:
+            return response.json()
+        sso = response.headers.get("X-GitHub-SSO", "")
+        if response.status_code == 401:
+            raise GitHubError(
+                ErrorCode.AUTH_REQUIRED,
+                "GitHub rejected the token. Check it is valid and not expired.",
+            )
+        if response.status_code == 403 and sso:
+            raise GitHubError(
+                ErrorCode.AUTH_REQUIRED,
+                f"The token is not SSO-authorised for {slug.split('/')[0]}. "
+                f"Authorise it for the organisation, then retry.",
+                sso,
+            )
+        if response.status_code in (403, 404):
+            raise GitHubError(
+                ErrorCode.NOT_FOUND if response.status_code == 404
+                else ErrorCode.AUTH_REQUIRED,
+                f"The token cannot see {slug}. For a private repository this "
+                f"usually means the token's repository access or scope, not the "
+                f"spelling.",
+                _message(response),
+            )
+        raise GitHubError(
+            ErrorCode.INTERNAL, f"GitHub: {_message(response)}",
+            response.text[:400],
+        )
+
+    def find_pull_request(self, slug: str, head_branch: str, base: str,
+                          state: str = "open") -> Optional[PullRequest]:
+        """A PR for this branch, so retrying does not duplicate it.
+
+        With state="all" a closed or merged PR is returned too: re-proposing
+        something a reviewer already closed is a decision for a person.
+        """
         owner = slug.split("/")[0]
         response = self._request(
             "GET", f"/repos/{slug}/pulls",
-            params={"head": f"{owner}:{head_branch}", "base": base, "state": "open"},
+            params={"head": f"{owner}:{head_branch}", "base": base, "state": state},
         )
         if response.status_code != 200:
             return None
@@ -219,31 +257,62 @@ def build_patch_pr_body(resolution: UpstreamResolution,
     return "\n".join(lines)
 
 
-def build_upstream_md_pr_body(resolution: UpstreamResolution) -> str:
+def build_upstream_md_pr_body(resolution: UpstreamResolution,
+                              base_sha: Optional[str] = None) -> str:
+    """The PR description for a debian/upstream.md proposal.
+
+    ARCoS CI (.github/workflows/description.yml) rejects a PR whose body lacks
+    "Problem Description :", "Root Cause :" and "Fix Details :", each with some
+    text after it - so those three come first, spelled exactly that way.
+    """
     upstream = resolution.upstream_repository
-    return "\n".join([
-        f"Records the verified upstream for `{resolution.package}` in "
-        f"`debian/upstream.md`.",
+    ref = resolution.upstream_branch or resolution.upstream_tag or \
+        resolution.upstream_ref or "N/A"
+    commit = (resolution.upstream_commit or "")[:12]
+    base = (base_sha or resolution.arcos_commit or "")[:12]
+    lines = [
+        "Problem Description :",
+        f"The ARCoS fork of {resolution.package} does not record which upstream "
+        f"project and branch it tracks, so comparing it with upstream or "
+        f"rebasing it depends on knowledge kept outside the repository.",
+        "",
+        "Root Cause :",
+        "The verified upstream mapping existed only in the ARCoS Package Manager "
+        f"output (upstream-mapping-{resolution.debian_release}), not in the "
+        "package repository itself.",
+        "",
+        "Fix Details :",
+        "Adds debian/upstream.md, generated from the verified mapping. No other "
+        "file changes; debian/rules, debian/control and the build are untouched.",
         "",
         "| | |",
         "|---|---|",
+        f"| ARCoS commit | {base or 'N/A'} ({resolution.arcos_branch or 'N/A'}) |",
         f"| Debian release | {resolution.debian_release} |",
         f"| Upstream repository | {upstream.url if upstream else 'N/A'} |",
-        f"| Upstream ref | `{resolution.upstream_ref}` |",
-        f"| Status | {resolution.status.value} |",
-        f"| Method | {resolution.method.value} |",
+        f"| Upstream ref | `{ref}`" + (f" @ {commit}" if commit else "") + " |",
+        f"| Status / method | {resolution.status.value} / "
+        f"{resolution.method.value} ({resolution.confidence}) |",
         f"| Origin kind | {resolution.origin_kind or 'N/A'} |",
-        "",
-        "The file is generated from the resolution the tool verified, so the "
-        "committed record and the dashboard cannot drift apart.",
-    ])
+    ]
+    if resolution.merge_base:
+        lines.append(
+            f"| Merge base | {resolution.merge_base[:12]} - "
+            f"{resolution.behind if resolution.behind is not None else '?'} behind, "
+            f"{resolution.arcos_only if resolution.arcos_only is not None else '?'}"
+            f" ARCoS-only |"
+        )
+    lines += ["", "Generated by the ARCoS Package Manager."]
+    return "\n".join(lines)
 
 
 def _to_pull_request(payload: dict, already_existed: bool = False) -> PullRequest:
     return PullRequest(
         number=payload.get("number"),
         url=payload.get("html_url"),
-        state=payload.get("state"),
+        # GitHub reports a merged PR as "closed"; they mean opposite things to
+        # anyone deciding whether to propose it again.
+        state="merged" if payload.get("merged_at") else payload.get("state"),
         title=payload.get("title", ""),
         body=payload.get("body") or "",
         base=(payload.get("base") or {}).get("ref", ""),

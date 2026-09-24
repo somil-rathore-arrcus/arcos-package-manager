@@ -115,12 +115,15 @@ export function DashboardPage() {
   )
 
   const createMdPr = useAsyncAction(async () => {
-    const pr = await api.createUpstreamMdPr({
+    const result = await api.createUpstreamMdPr({
       package: selection.pkg, release: selection.release,
       arcos_branch: selection.branch || undefined, confirm: true,
     })
-    setMdPr(pr)
-    return pr
+    if (!result.pull_request) {
+      throw new Error(`${result.status}${result.error ? `: ${result.error}` : ''}`)
+    }
+    setMdPr(result.pull_request)
+    return result.pull_request
   })
 
   const resetDownstream = () => {
