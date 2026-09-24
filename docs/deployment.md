@@ -125,6 +125,11 @@ APM_SSH_KNOWN_HOSTS_FILE=/home/you/.ssh/known_hosts
 
 Both mount read-only. `APM_UID` should match the owner of those files.
 
+`./out` is mounted read-write at `/app/out`: the mapping, the generated
+`debian/upstream.md` files, the plan and the PR results ledger live there, so a
+rebuild never loses them. Create it before the first start and make it writable
+by `APM_UID` (setting `APM_UID=$(id -u)` in `.env` is simplest).
+
 ## Deploying to a VM
 
 The VM does not need repository access either, as long as it can reach the

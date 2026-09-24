@@ -14,6 +14,10 @@ services:
       APM_WORKSPACE_DIR: /var/tmp/arcos-package-manager
     volumes:
       - ./config:/app/config:ro
+      # The mapping, the generated debian/upstream.md files, the plan and the
+      # PR results ledger. On the host so a rebuild never loses the record of
+      # which branches and pull requests exist. Must be writable by APM_UID.
+      - ./out:/app/out
       - apm-cache:/var/cache/arcos-package-manager
       - apm-workspace:/var/tmp/arcos-package-manager
       # Read-only SSH material for the bridge. Defaults to /dev/null so the
