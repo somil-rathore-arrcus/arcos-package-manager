@@ -1,4 +1,7 @@
-"""Turn the per-release manifests into config/packages.yaml.
+"""Turn the per-release manifests into the package catalogue (packages.yaml).
+
+Written to config.packages_file(): config/packages.yaml in a checkout, or
+wherever APM_PACKAGES_FILE points (the container's writable out/ mount).
 
 One entry per package, carrying which releases ship it and the ARCoS branch each
 release tracks. Generated - curated decisions belong in overrides.yaml, so
@@ -8,6 +11,8 @@ regenerating this file never destroys human work.
 from __future__ import annotations
 
 import datetime as _dt
+import os
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -64,9 +69,29 @@ def build_catalog(per_release: dict, settings) -> dict:
 
 
 def write_catalog(catalog: dict, path: Path, settings) -> None:
+    """Write the catalogue atomically: a reader never sees half a file, and a
+    failed write leaves the previous catalogue in place."""
     header = HEADER.format(
         repository=settings.manifest.get("repository"),
         branches=settings.manifest.get("branches", {}),
     )
     body = yaml.safe_dump(catalog, sort_keys=False, default_flow_style=False, width=100)
-    path.write_text(header + "\n" + body, encoding="utf-8")
+    path = Path(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle, temp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    except OSError as exc:
+        raise OSError(
+            exc.errno,
+            f"cannot write the package catalogue to {path}: {exc.strerror}. "
+            f"Point APM_PACKAGES_FILE at a writable path (the container uses "
+            f"/app/out/packages.yaml).",
+        ) from exc
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(header + "\n" + body)
+        os.replace(temp, path)
+    except BaseException:
+        if os.path.exists(temp):
+            os.unlink(temp)
+        raise

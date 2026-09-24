@@ -10,7 +10,8 @@ from pathlib import Path
 
 from .cache import HttpCache
 from .config import (
-    CONFIG_DIR, ROOT, Environment, load_overrides, load_packages, load_settings,
+    ROOT, Environment, load_overrides, load_packages, load_settings,
+    packages_file,
 )
 from .discovery.catalog import build_catalog, write_catalog
 from .discovery.gitmodules import discover
@@ -34,7 +35,8 @@ def cmd_discover(args) -> int:
     settings, _, _, transports = _context()
     per_release = discover(transports, settings)
     catalog = build_catalog(per_release, settings)
-    write_catalog(catalog, CONFIG_DIR / "packages.yaml", settings)
+    target = packages_file()
+    write_catalog(catalog, target, settings)
     packages = catalog["packages"]
     if args.json:
         # The discovery result itself, for anything that wants the package set
@@ -52,7 +54,7 @@ def cmd_discover(args) -> int:
         ]
         print(json.dumps(discovered, indent=2))
         return 0
-    print(f"discovered {len(packages)} packages -> {CONFIG_DIR / 'packages.yaml'}")
+    print(f"discovered {len(packages)} packages -> {target}")
     for release in settings.release_ids:
         count = sum(1 for p in packages.values() if release in p["releases"])
         print(f"  {release}: {count}")
@@ -137,7 +139,8 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_discover = sub.add_parser(
-        "discover", help="read the arrcus_rel manifests -> config/packages.yaml"
+        "discover",
+        help="read the arrcus_rel manifests -> packages.yaml (APM_PACKAGES_FILE)"
     )
     p_discover.add_argument(
         "--json", action="store_true",

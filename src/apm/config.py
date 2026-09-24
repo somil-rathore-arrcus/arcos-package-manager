@@ -21,6 +21,11 @@ from .models import Package
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = ROOT / "config"
 
+# The generated package catalogue. Committed as config/packages.yaml, but
+# `discover` rewrites it at runtime - and in a container config/ is mounted
+# read-only, so the rewrite goes wherever APM_PACKAGES_FILE points instead.
+PACKAGES_FILE_ENV = "APM_PACKAGES_FILE"
+
 
 def _read_yaml(path: Path) -> dict:
     if not path.exists():
@@ -219,8 +224,29 @@ def load_overrides(path: Optional[Path] = None) -> dict:
     return data.get("packages", {}) or {}
 
 
+def packages_file() -> Path:
+    """Where `discover` writes the package catalogue.
+
+    APM_PACKAGES_FILE when set (the container points it at the writable out/
+    mount), otherwise config/packages.yaml as in a local checkout.
+    """
+    _load_dotenv(ROOT / ".env")
+    configured = os.environ.get(PACKAGES_FILE_ENV, "").strip()
+    return Path(configured).expanduser() if configured else CONFIG_DIR / "packages.yaml"
+
+
+def packages_source() -> Path:
+    """Where the package catalogue is read from.
+
+    The runtime file once `discover` has written one; until then the catalogue
+    committed in config/, so a fresh deployment still has a package list.
+    """
+    runtime = packages_file()
+    return runtime if runtime.exists() else CONFIG_DIR / "packages.yaml"
+
+
 def load_packages(path: Optional[Path] = None) -> list:
-    data = _read_yaml(path or CONFIG_DIR / "packages.yaml")
+    data = _read_yaml(path or packages_source())
     packages = []
     for name, entry in (data.get("packages") or {}).items():
         packages.append(

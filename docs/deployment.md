@@ -130,6 +130,11 @@ Both mount read-only. `APM_UID` should match the owner of those files.
 rebuild never loses them. Create it before the first start and make it writable
 by `APM_UID` (setting `APM_UID=$(id -u)` in `.env` is simplest).
 
+`./config` stays mounted **read-only**. The one file under it that is generated -
+the package catalogue `discover` (and `resolve_bookworm`) rewrites - is written to
+`APM_PACKAGES_FILE`, which the compose file sets to `/app/out/packages.yaml`.
+Until the first discovery, the committed `config/packages.yaml` is read instead.
+
 ## Deploying to a VM
 
 The VM does not need repository access either, as long as it can reach the

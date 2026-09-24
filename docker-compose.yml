@@ -12,6 +12,10 @@ services:
     environment:
       APM_CACHE_DIR: /var/cache/arcos-package-manager
       APM_WORKSPACE_DIR: /var/tmp/arcos-package-manager
+      # config/ stays read-only; the catalogue `discover` regenerates is
+      # runtime state and lives on the writable out/ mount. Until the first
+      # discover, the committed config/packages.yaml is read instead.
+      APM_PACKAGES_FILE: /app/out/packages.yaml
     volumes:
       - ./config:/app/config:ro
       # The mapping, the generated debian/upstream.md files, the plan and the
