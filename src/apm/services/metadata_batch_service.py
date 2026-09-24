@@ -25,14 +25,17 @@ from typing import List, Optional
 
 from ..domain.enums import ResolutionStatus, UpstreamMdOutcome
 from ..domain.models import UpstreamResolution
+from .upstream_md_publisher import (
+    BRANCH_TEMPLATE, branch_for, commit_title, sha256_text,
+)
 from .upstream_md_service import UPSTREAM_MD_PATH
 
 log = logging.getLogger(__name__)
 
-# One branch per package, named after what it carries rather than when it ran,
-# so re-running the plan proposes the same branch instead of a second one.
-BRANCH_TEMPLATE = "upstream-metadata/{package}"
-COMMIT_MESSAGE = "docs: add upstream metadata"
+# One branch per package and release, named after what it carries rather than
+# when it ran, so re-running the plan proposes the same branch instead of a
+# second one. Shared with the publisher, so the plan names what it will push.
+COMMIT_MESSAGE = commit_title("<package>", None)
 
 
 @dataclass
@@ -54,6 +57,10 @@ class PlanEntry:
     # True when the fork could not be read, so CREATED here means "nothing was
     # found", not "nothing is there".
     existing_unknown: bool = False
+    # The exact bytes that were reviewed. The publisher refuses to commit a
+    # file that no longer hashes to this.
+    sha256: str = ""
+    bytes: int = 0
 
     def as_dict(self) -> dict:
         return {
@@ -71,6 +78,8 @@ class PlanEntry:
             "upstream_ref": self.upstream_ref,
             "reason": self.reason,
             "existing_unknown": self.existing_unknown,
+            "sha256": self.sha256,
+            "bytes": self.bytes,
             "diff": self.diff,
         }
 
@@ -118,9 +127,11 @@ class MetadataBatchService:
             )
             workspace.destroy()
             workspace.ensure()
+            # One file at one commit: history is not needed, and on the linux
+            # fork fetching it is most of the run.
             head = workspace.fetch_side(
                 "arcos", resolution.arcos_repository,
-                resolution.arcos_commit or resolution.arcos_branch,
+                resolution.arcos_commit or resolution.arcos_branch, depth=1,
             )
             return workspace.read_file(UPSTREAM_MD_PATH, rev=head), False
         except Exception as exc:  # noqa: BLE001 - reported, never fatal
@@ -181,8 +192,9 @@ class MetadataBatchService:
                 arcos_repository=resolution.github_repository
                 or resolution.arcos_repository,
                 arcos_branch=resolution.arcos_branch,
-                branch=self.branch_template.format(package=resolution.package),
-                commit_message=self.commit_message,
+                branch=branch_for(resolution.package, release,
+                                  self.branch_template),
+                commit_message=commit_title(resolution.package, outcome),
                 local_path=str(target),
                 diff=document.diff or "",
                 upstream_repository=(
@@ -192,6 +204,8 @@ class MetadataBatchService:
                 upstream_ref=resolution.upstream_ref or "",
                 reason=resolution.reason or "",
                 existing_unknown=unknown,
+                sha256=sha256_text(document.content),
+                bytes=len(document.content.encode("utf-8")),
             ))
         return result
 
@@ -213,7 +227,9 @@ class MetadataBatchService:
             "pull_requests_created": False,
             "note": (
                 "A description of work that has NOT been done. No branch was "
-                "created, nothing was pushed and no pull request was opened."
+                "created, nothing was pushed and no pull request was opened. "
+                "What apm publish-upstream-md does is recorded in "
+                f"upstream-md-pr-results-{result.release}.json."
             ),
             "outcomes": result.outcomes,
             "entries": [e.as_dict() for e in result.entries],
@@ -229,7 +245,7 @@ class MetadataBatchService:
             "",
             f"- File: `{UPSTREAM_MD_PATH}`",
             f"- Commit message: `{self.commit_message}`",
-            f"- Branch: `{self.branch_template.format(package='<package>')}`",
+            f"- Branch: `{branch_for('<package>', result.release, self.branch_template)}`",
             "",
             "| Package | ARCoS repository | Base branch | Branch | Outcome | Upstream |",
             "|---|---|---|---|---|---|",

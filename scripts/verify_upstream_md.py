@@ -12,6 +12,7 @@ emits one the mapping does not support, is caught before anything is proposed.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import re
 import sys
@@ -130,6 +131,28 @@ def main(release: str) -> int:
         ]
         check("no planned branch is the branch it targets", not bad_base,
               ", ".join(bad_base))
+        outside = [
+            e["package"] for e in plan["entries"]
+            if not e["branch"].startswith("upstream-metadata/")
+        ]
+        check("every planned branch is under upstream-metadata/", not outside,
+              ", ".join(outside))
+
+        # The publisher commits these bytes only if they still hash to what
+        # the plan recorded; say so here first rather than at push time.
+        hashed = [e for e in plan["entries"] if e.get("sha256")]
+        if hashed:
+            changed = [
+                e["package"] for e in hashed
+                if e["package"] in generated and hashlib.sha256(
+                    generated[e["package"]].read_bytes()
+                ).hexdigest() != e["sha256"]
+            ]
+            check("every generated file still matches the plan's hash",
+                  not changed, ", ".join(changed))
+        else:
+            print("  note  the plan has no content hashes; regenerate it before "
+                  "publish-upstream-md")
 
     print()
     print(f"generated: {len(generated)}   mapping rows: {len(rows)}")

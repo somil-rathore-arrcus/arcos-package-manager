@@ -16,6 +16,7 @@ from ..domain.enums import ErrorCode
 from ..services.comparison_service import ComparisonError
 from ..services.github_service import GitHubError
 from ..services.patch_service import PatchError
+from ..services.upstream_md_publisher import PublishError
 from ..services.upstream_service import UpstreamServiceError
 
 log = logging.getLogger(__name__)
@@ -34,7 +35,9 @@ STATUS = {
     ErrorCode.INTERNAL: 500,
 }
 
-HANDLED = (ComparisonError, PatchError, GitHubError, UpstreamServiceError)
+HANDLED = (
+    ComparisonError, PatchError, GitHubError, UpstreamServiceError, PublishError,
+)
 
 
 def install(app) -> None:

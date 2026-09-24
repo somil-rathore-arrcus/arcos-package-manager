@@ -85,8 +85,18 @@ class UpstreamMdPrRequest(BaseModel):
     package: str
     release: str
     arcos_branch: Optional[str] = None
-    branch_name: Optional[str] = None
+    branch_name: Optional[str] = Field(
+        None,
+        description="Must be under upstream-metadata/ and not the target branch.",
+    )
     draft: bool = False
+    dry_run: bool = Field(
+        False,
+        description=(
+            "Build and check the exact commit, then stop: nothing is pushed and "
+            "no pull request is opened."
+        ),
+    )
     confirm: bool = Field(
         False,
         description=(

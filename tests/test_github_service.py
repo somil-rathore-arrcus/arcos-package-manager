@@ -126,3 +126,65 @@ def test_pr_body_lists_commits_with_their_evidence():
     assert "CRITICAL" in body and "CVE-2026-1" in body
     assert "cherry-pick -x" in body
     assert "the target branch was not modified" in body.lower()
+
+
+def test_repository_preflight_returns_the_repo():
+    def handler(request):
+        assert request.url.path == "/repos/Arrcus/mstpd"
+        assert request.headers["Authorization"] == "Bearer tok"
+        return httpx.Response(200, json={"full_name": "Arrcus/mstpd",
+                                         "permissions": {"pull": True}})
+
+    assert _service(handler).get_repository("Arrcus/mstpd")["full_name"] == \
+        "Arrcus/mstpd"
+
+
+def test_repository_preflight_names_missing_sso_authorisation():
+    def handler(request):
+        return httpx.Response(
+            403, json={"message": "Resource protected by organization SAML"},
+            headers={"X-GitHub-SSO": "required; url=https://github.com/orgs/Arrcus/sso"},
+        )
+
+    with pytest.raises(GitHubError) as raised:
+        _service(handler).get_repository("Arrcus/mstpd")
+    assert raised.value.code is ErrorCode.AUTH_REQUIRED
+    assert "SSO" in str(raised.value)
+    assert "orgs/Arrcus/sso" in raised.value.detail
+
+
+def test_repository_preflight_needs_a_token_and_sends_nothing_without_one():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={})
+
+    with pytest.raises(GitHubError):
+        _service(handler, token="").get_repository("Arrcus/mstpd")
+    assert calls == []
+
+
+def test_find_pull_request_can_include_closed_ones():
+    seen = {}
+
+    def handler(request):
+        seen.update(request.url.params)
+        return httpx.Response(200, json=[{**PR_PAYLOAD, "state": "closed"}])
+
+    pr = _service(handler).find_pull_request(
+        "Arrcus/mstpd", "upstream-metadata/bookworm/mstpd", "aminor", state="all",
+    )
+    assert seen["state"] == "all"
+    assert seen["head"] == "Arrcus:upstream-metadata/bookworm/mstpd"
+    assert pr.state == "closed"
+
+
+def test_a_merged_pull_request_is_not_reported_as_closed():
+    def handler(request):
+        return httpx.Response(200, json=[{**PR_PAYLOAD, "state": "closed",
+                                          "merged_at": "2026-09-25T10:00:00Z"}])
+
+    pr = _service(handler).find_pull_request("Arrcus/mstpd", "b", "aminor",
+                                             state="all")
+    assert pr.state == "merged"

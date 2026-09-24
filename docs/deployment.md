@@ -66,13 +66,32 @@ curl -s localhost:8080/api/health/workspace
 
 ## GitHub token
 
-Reading private repositories works over SSH without a token. Only the REST API
-needs one, so without `APM_GITHUB_TOKEN` everything works except opening pull
-requests, and the UI says so rather than failing at the last step.
+Two separate credentials are involved, and they never stand in for each other:
 
-The token needs `repo` scope, and SSO authorisation if the organisation uses
-SAML. A 404 from GitHub on a private repository is what an unauthorised token
-looks like — check the token before the spelling.
+| | Git transport (fetch, push) | GitHub REST API (find/open PRs) |
+|---|---|---|
+| Code | `gitio/transport.py` (`SshGit`) | `services/github_service.py` |
+| Runs on | the SSH bridge; workspaces live there | the backend, directly to `APM_GITHUB_API_URL` |
+| Credential | the GitHub SSH key on the bridge host | `APM_GITHUB_TOKEN` |
+
+So branches are pushed with the bridge's key, and pull requests are opened by
+whoever owns the token. The backend must be able to reach `api.github.com:443`
+itself; the bridge does not carry API traffic.
+
+Without `APM_GITHUB_TOKEN` everything works except opening pull requests. The
+dashboard says so up front, and `publish-upstream-md --apply` refuses before any
+push - a pre-flight checks the token against every repository first, so a token
+that cannot open PRs never leaves a pushed branch behind.
+
+The token needs **Pull requests: Read and write** and **Metadata: Read** on the
+package repositories (fine-grained), or `repo` scope (classic). It does not
+need Contents: write. If the organisation enforces SAML, the token must be
+SSO-authorised; pre-flight reports GitHub's SSO message verbatim. A 404 on a
+private repository is what an unauthorised token looks like - check the token
+before the spelling.
+
+Commits are authored as `APM_COMMITTER_NAME <APM_COMMITTER_EMAIL>`; set both to
+the person accountable for the pull requests.
 
 ## Local development (macOS)
 

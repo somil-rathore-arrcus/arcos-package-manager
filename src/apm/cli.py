@@ -85,6 +85,12 @@ def cmd_generate_upstream_md(args) -> int:
     )
 
 
+def cmd_publish_upstream_md(args) -> int:
+    from .publish_upstream_md import run_from_args
+
+    return run_from_args(args)
+
+
 def cmd_resolve(args) -> int:
     settings, env, cache, transports = _context()
     packages = load_packages()
@@ -176,6 +182,16 @@ def main(argv=None) -> int:
     p_md.add_argument("--include-needs-review", action="store_true")
     p_md.add_argument("--offline", action="store_true")
     p_md.set_defaults(func=cmd_generate_upstream_md)
+
+    from .publish_upstream_md import add_arguments as publish_arguments
+
+    p_pub = sub.add_parser(
+        "publish-upstream-md",
+        help="propose the reviewed debian/upstream.md files as PRs "
+             "(dry run unless --apply)",
+    )
+    publish_arguments(p_pub)
+    p_pub.set_defaults(func=cmd_publish_upstream_md)
 
     args = parser.parse_args(argv)
     logging.basicConfig(

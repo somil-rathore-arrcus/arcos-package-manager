@@ -48,6 +48,17 @@ PYTHONPATH=src ./.venv/bin/python -m apm.generate_upstream_md \
 Neither pushes, creates a branch or opens a pull request, and neither needs a
 GitHub token.
 
+Proposing the reviewed files is a separate, explicit step - a dry run unless
+`--apply` is given:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m apm publish-upstream-md --package mstpd
+PYTHONPATH=src ./.venv/bin/python -m apm publish-upstream-md --package mstpd \
+    --apply --confirm mstpd
+#   -> one branch upstream-metadata/bookworm/<package>, one commit, one PR
+#   -> out/upstream-md-pr-results-bookworm.{json,md}
+```
+
 ## What it does
 
 ### 1. Discovery — what ARCoS actually ships
@@ -116,6 +127,11 @@ record and the tool cannot disagree. Deterministic, so it can be compared with
 what is already in the repository: `CREATED`, `UPDATED`, `NO_CHANGE` or
 `CONFLICT`. A file this tool did not write is never overwritten.
 
+`apm publish-upstream-md` proposes each file as its own pull request: a commit
+built from the target tip's tree plus that one file, pushed to
+`upstream-metadata/<release>/<package>` without force, and recorded in a ledger
+so re-runs resume. The target branch is never written to.
+
 ## Reading the output
 
 | Status | Meaning |
@@ -171,7 +187,8 @@ All under `/api`. Full schema at `/docs` when the backend is running.
 | POST | `/patches/cherry-pick` | New branch; pushes only if asked |
 | POST/GET | `/pull-requests`, `/pull-requests/{number}` | Pull requests |
 | POST | `/upstream-md/generate` | Render `debian/upstream.md` |
-| POST | `/upstream-md/pr` | Propose it; needs `confirm: true` |
+| POST | `/upstream-md/pr` | Propose it; needs `confirm: true` (or `dry_run: true`) |
+| GET | `/upstream-md/prs` | What proposing has done so far (the ledger) |
 | GET | `/reports`, `/reports/{name}` | Generated mapping workbooks and CSVs |
 
 ## Configuration

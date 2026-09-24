@@ -17,6 +17,7 @@ from .enums import (
     Criticality,
     PackageCategory,
     PreviewOutcome,
+    PublishStatus,
     ResolutionMethod,
     ResolutionMode,
     ResolutionStatus,
@@ -342,3 +343,35 @@ class UpstreamMdDocument(BaseModel):
     existing_content: Optional[str] = None
     diff: Optional[str] = None
     local_path: Optional[str] = None
+
+
+class PublishResult(BaseModel):
+    """One package's debian/upstream.md proposal: what was done and where it is.
+
+    The same record is returned by the API, printed by the CLI and kept in the
+    results ledger, so the three cannot describe a run differently.
+    """
+
+    package: str
+    release: str
+    status: PublishStatus
+    repository: str = Field("", description="owner/name on GitHub")
+    base_branch: str = ""
+    branch: str = ""
+    pinned_commit: Optional[str] = Field(
+        None, description="The commit the release manifest pins."
+    )
+    base_sha: Optional[str] = Field(
+        None, description="The target branch tip the commit was built on."
+    )
+    base_moved: bool = Field(
+        False, description="The target branch has moved past the pinned commit."
+    )
+    outcome: Optional[UpstreamMdOutcome] = None
+    commit: Optional[str] = None
+    pushed: bool = False
+    title: str = ""
+    pull_request: Optional[PullRequest] = None
+    error: Optional[str] = None
+    diff: Optional[str] = None
+    updated_at: Optional[datetime] = None

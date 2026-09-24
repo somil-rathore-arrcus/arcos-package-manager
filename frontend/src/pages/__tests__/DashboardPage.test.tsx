@@ -292,6 +292,35 @@ describe('upstream.md', () => {
     expect(recorded.calls.some((c) => c.path === '/upstream-md/pr')).toBe(false)
   })
 
+  it('proposes it only when asked, and links the pull request', async () => {
+    const recorded = await openDashboard()
+    await resolve()
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
+    await screen.findByText('CREATED')
+    await user.click(screen.getByRole('button', { name: /create pull request/i }))
+
+    expect(await screen.findByText('https://github.com/Arrcus/pyrad/pull/43'))
+      .toBeInTheDocument()
+    const call = recorded.calls.find((c) => c.path === '/upstream-md/pr')
+    expect(call?.body).toMatchObject({ package: 'pyrad', confirm: true })
+  })
+
+  it('reports why no pull request was opened', async () => {
+    await openDashboard({
+      upstreamMdPr: {
+        ...fx.upstreamMdPublish, status: 'CONFLICT', pull_request: null,
+        pushed: false, error: 'debian/upstream.md was not written by this tool',
+      },
+    })
+    await resolve()
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
+    await screen.findByText('CREATED')
+    await user.click(screen.getByRole('button', { name: /create pull request/i }))
+
+    expect(await screen.findByText(/CONFLICT: debian\/upstream.md was not written/))
+      .toBeInTheDocument()
+  })
+
   it('is hidden for a package with no upstream', async () => {
     await openDashboard({ upstream: fx.noUpstream })
     await resolve()

@@ -149,22 +149,31 @@ class UpstreamMdService:
             existing_content=existing,
         )
 
-        if existing is None:
-            document.outcome = UpstreamMdOutcome.CREATED
-            return document
-
-        if _normalise(existing) == _normalise(content):
-            document.outcome = UpstreamMdOutcome.NO_CHANGE
-            return document
-
-        document.diff = _diff(existing, content)
-        # A file we did not write may carry information this tool does not know
-        # about, so replacing it is a decision for a person.
-        document.outcome = (
-            UpstreamMdOutcome.UPDATED if MARKER in existing
-            else UpstreamMdOutcome.CONFLICT
-        )
+        document.outcome, diff = classify(existing, content)
+        if document.outcome in (UpstreamMdOutcome.UPDATED,
+                                UpstreamMdOutcome.CONFLICT):
+            document.diff = diff
         return document
+
+
+def classify(existing: Optional[str], content: str):
+    """What writing `content` over `existing` would do, and the diff.
+
+    Shared by generation and publishing, so the plan and the commit cannot reach
+    different conclusions about the same file. `existing` is None when there is
+    no file.
+    """
+    if existing is None:
+        return UpstreamMdOutcome.CREATED, _diff("", content)
+    if _normalise(existing) == _normalise(content):
+        return UpstreamMdOutcome.NO_CHANGE, ""
+    # A file we did not write may carry information this tool does not know
+    # about, so replacing it is a decision for a person.
+    outcome = (
+        UpstreamMdOutcome.UPDATED if MARKER in existing
+        else UpstreamMdOutcome.CONFLICT
+    )
+    return outcome, _diff(existing, content)
 
 
 def _or_none(value) -> str:
