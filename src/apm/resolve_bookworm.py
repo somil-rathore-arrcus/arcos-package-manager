@@ -21,7 +21,8 @@ from pathlib import Path
 
 from .cache import HttpCache
 from .config import (
-    CONFIG_DIR, ROOT, Environment, load_overrides, load_packages, load_settings,
+    ROOT, Environment, load_overrides, load_packages, load_settings,
+    packages_file,
 )
 from .discovery.catalog import build_catalog, write_catalog
 from .discovery.gitmodules import discover
@@ -60,7 +61,7 @@ def run(release: str = "bookworm", out_dir: Path = None, rediscover: bool = True
         )
         per_release = discover(transports, settings)
         catalog = build_catalog(per_release, settings)
-        write_catalog(catalog, CONFIG_DIR / "packages.yaml", settings)
+        write_catalog(catalog, packages_file(), settings)
 
     packages = [p for p in load_packages() if release in (p.releases or [release])]
     if packages_wanted:
@@ -154,7 +155,8 @@ def main(argv=None) -> int:
     parser.add_argument("--package", action="append")
     parser.add_argument(
         "--no-discover", action="store_true",
-        help="reuse config/packages.yaml instead of re-reading the manifest",
+        help="reuse the package catalogue on disk instead of re-reading the "
+             "manifest",
     )
     parser.add_argument(
         "--no-ancestry", action="store_true",
