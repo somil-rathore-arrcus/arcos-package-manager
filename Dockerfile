@@ -41,6 +41,8 @@ FROM base AS test
 COPY requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements-dev.txt
 COPY tests/ ./tests/
+# Some tests check the deployment contract itself (read-only config, key mounts).
+COPY docker-compose.yml ./
 RUN chown -R apm:apm /app/tests
 USER apm
 CMD ["python", "-m", "pytest", "tests", "-q"]
