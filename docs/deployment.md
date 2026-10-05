@@ -143,7 +143,41 @@ Until the first discovery, the committed `config/packages.yaml` is read instead.
 file mounts them read-only and points the container at the mounted copies, so
 the container never tries to use a path that only exists on the host.
 
-## On the host that holds repository access (the authoritative environment)
+## On the host, without Docker (the authoritative environment)
+
+The supported way to run on the host that holds repository access needs no
+Docker, no docker compose, no Node and no root. One uvicorn process in the
+project's own virtualenv serves the dashboard at `/` and the API at `/api` on
+`0.0.0.0:8080`; git runs on the host with the host's own SSH key.
+
+```bash
+cd ~/somil/arcos-package-manager
+scripts/setup-venv.sh            # once: .venv with the dependencies (--dev adds pytest)
+scripts/build-frontend.sh        # after frontend changes: npm, or Docker's node image
+scripts/server.sh start          # dashboard + API on http://<host>:8080/
+scripts/server.sh status         # running? does /api/health answer?
+scripts/server.sh logs           # out/run/server.log
+scripts/server.sh restart        # after a git pull
+scripts/apm doctor --repo Arrcus/mstpd     # the CLI, same commands as in the container
+```
+
+`.env` is read by the application (`APM_GIT_BACKEND=local` is right here: git
+uses the host's `~/.ssh` key). `APM_HOST` / `APM_PORT` change the listening
+address. Runtime state - the package catalogue, the mapping, approvals,
+comparison snapshots, logs - goes to `out/`, so the checkout stays clean.
+The server survives logout but not a reboot; run `scripts/server.sh start`
+again after one.
+
+Updating to new code:
+
+```bash
+git pull --ff-only
+scripts/setup-venv.sh            # only if requirements changed
+scripts/build-frontend.sh        # only if frontend/ changed
+scripts/server.sh restart
+```
+
+## On the host that holds repository access, in Docker
 
 When the machine that runs the tool is also the machine whose SSH key reaches
 the private repositories, no bridge is needed: git runs inside the container

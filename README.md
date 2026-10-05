@@ -18,7 +18,14 @@ cp .env.example .env            # then edit: see docs/deployment.md
 ./scripts/dev-frontend.sh       # http://localhost:5173
 ```
 
-Or the whole stack:
+Or, on a host, as one process with no Docker, Node or root (dashboard and API on
+port 8080 - see docs/deployment.md):
+
+```bash
+scripts/setup-venv.sh && scripts/build-frontend.sh && scripts/server.sh start
+```
+
+Or the whole stack in Docker:
 
 ```bash
 docker compose up -d --build    # http://localhost:8080
