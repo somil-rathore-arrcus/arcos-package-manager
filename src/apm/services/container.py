@@ -174,12 +174,7 @@ class Container:
     def capabilities(self) -> dict:
         """What this deployment can actually do, so the UI can say so up front."""
         return {
-            "read_private_repositories": (
-                self.environment.git_backend != "local"
-                or self.environment.ssh.configured
-                # Container-local git with the host's mounted key.
-                or bool(self.environment.git_ssh_identity_file)
-            ),
+            "read_private_repositories": self.private_access(),
             "create_pull_requests": self.github.can_create_pull_requests,
             "git": self.transports.describe(),
             "workspace_root": self.workspaces.root,
@@ -189,6 +184,29 @@ class Container:
             "read_only": not self.github.can_create_pull_requests,
             "storage": self.storage(),
         }
+
+    def private_access(self, ttl: float = 600.0) -> bool:
+        """Whether the private release manifest can actually be read.
+
+        Measured, not inferred from configuration: on a host with its own key,
+        a "local" backend has the access, and in a container without one it
+        does not - configuration alone cannot tell the two apart. Cached so a
+        polled health check does not run git every time.
+        """
+        import time
+
+        now = time.time()
+        cached = getattr(self, "_private_access", None)
+        if cached is not None and now - cached[0] < ttl:
+            return cached[1]
+        manifest = self.settings.manifest.get("repository", "")
+        ok = False
+        if manifest:
+            result = self.transports.for_url(manifest).run(
+                ["ls-remote", manifest, "HEAD"], timeout=30)
+            ok = bool(result.ok and result.text)
+        self._private_access = (now, ok)
+        return ok
 
     def storage(self) -> dict:
         """Whether the runtime files can be written, without writing them."""

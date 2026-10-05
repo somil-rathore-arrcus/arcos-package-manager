@@ -140,3 +140,28 @@ def test_server_status_reports_not_running(tmp_path):
     result = subprocess.run(["bash", "scripts/server.sh", "status"], cwd=tmp_path,
                             capture_output=True, text=True)
     assert result.returncode == 1 and "not running" in result.stdout
+
+
+def test_private_access_is_measured_and_cached():
+    from apm.gitio.transport import GitResult
+    from apm.services.container import Container
+
+    calls = []
+
+    class Git:
+        def run(self, args, timeout=None):
+            calls.append(args)
+            return GitResult(True, "abc\tHEAD\n", "")
+
+    class Transports:
+        def for_url(self, url):
+            return Git()
+
+    class Settings:
+        manifest = {"repository": "ssh://git@github.com/Arrcus/arrcus_rel.git"}
+
+    holder = Container.__new__(Container)
+    holder.transports, holder.settings = Transports(), Settings()
+    assert holder.private_access() is True
+    assert holder.private_access() is True
+    assert len(calls) == 1, "a polled health check must not run git every time"
