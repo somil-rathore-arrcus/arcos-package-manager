@@ -52,6 +52,15 @@ class PatchRequest(BaseModel):
     upstream_repository: str
     upstream_ref: str
     shas: List[str] = Field(default_factory=list)
+    comparison_arcos_commit: Optional[str] = Field(
+        None, description="The ARCoS commit the comparison was computed against."
+    )
+    comparison_upstream_commit: Optional[str] = None
+    approved_shas: List[str] = Field(
+        default_factory=list,
+        description="Commits deliberately selected from outside the current "
+                    "missing set.",
+    )
 
 
 class CherryPickRequest(PatchRequest):
@@ -59,6 +68,20 @@ class CherryPickRequest(PatchRequest):
     push: bool = Field(
         False, description="Push the new branch. Never happens without this."
     )
+    expected_base_sha: Optional[str] = Field(
+        None,
+        description="base_sha from the preview. Required: the cherry-pick is "
+                    "refused if the target branch has moved since.",
+    )
+
+
+class ContentBaseApprovalRequest(BaseModel):
+    package: str
+    release: str
+    tag: Optional[str] = Field(None, description="Default: the best content match.")
+    verified_by: str = Field(description="The person accountable for the decision.")
+    note: Optional[str] = None
+    confirm: bool = Field(False, description="Must be true.")
 
 
 class PullRequestRequest(BaseModel):

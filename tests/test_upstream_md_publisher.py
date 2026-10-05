@@ -23,7 +23,7 @@ import pytest
 import gitfixtures as g
 from apm.domain.enums import (
     ErrorCode, PackageCategory, PublishStatus, ResolutionMethod, ResolutionMode,
-    ResolutionStatus, UpstreamMdOutcome,
+    ResolutionStatus, UpstreamMdOutcome, VerificationLevel,
 )
 from apm.domain.models import (
     PublishResult, PullRequest, Repository, ResolutionEvidence,
@@ -47,7 +47,12 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "apm"
 
 # -- fixtures -----------------------------------------------------------------
 
-def _resolution(package="mstpd", url="", **overrides) -> UpstreamResolution:
+def _resolution(package="mstpd", url="", remote=None, **overrides) -> UpstreamResolution:
+    if remote is not None:
+        url = remote.url
+        overrides.setdefault("upstream_repository",
+                             Repository(url=remote.upstream_url))
+        overrides.setdefault("upstream_commit", remote.upstream_sha)
     values = dict(
         package=package, debian_release="bookworm",
         status=ResolutionStatus.VERIFIED, mode=ResolutionMode.AUTO,
@@ -59,7 +64,9 @@ def _resolution(package="mstpd", url="", **overrides) -> UpstreamResolution:
         upstream_repository=Repository(url=f"https://github.com/{package}/{package}.git"),
         upstream_ref="master", upstream_branch="master",
         upstream_commit="2e747d80ad48", origin_kind="project",
-        merge_base="76289208dcaa", behind=101, arcos_only=39,
+        merge_base="76289208dcaa", merge_bases=["76289208dcaa"], behind=101,
+        arcos_only=39, verification_level=VerificationLevel.SHARED_HISTORY,
+        counts_basis="raw commit-graph counts, head-based",
         evidence_source="config/overrides.yaml (hand-verified)",
         verification="git merge-base",
         evidence=[ResolutionEvidence(kind="curated", detail="curated override")],
@@ -84,6 +91,23 @@ class Remote:
         g.git(self.bare, "config", "uploadpack.allowFilter", "true")
         self.url = "file://" + str(self.bare)
         self.source = source
+        # The upstream project, local too: the publisher re-reads its ref
+        # before proposing, and a test must never reach github.com.
+        upstream = g.init(root / "upstream-src")
+        g.commit(upstream, "README", "mstpd\n", "upstream")
+        self.upstream_bare = root / "upstream.git"
+        g.git(root, "clone", "-q", "--bare", str(upstream), str(self.upstream_bare))
+        g.git(self.upstream_bare, "branch", "-m", "main", "master")
+        self.upstream_url = "file://" + str(self.upstream_bare)
+        self.upstream_sha = g.git(self.upstream_bare, "rev-parse", "master")
+        self.upstream_src = upstream
+
+    def move_upstream(self):
+        """Upstream master gains a commit after the mapping was made."""
+        g.git(self.upstream_src, "remote", "add", "bare", str(self.upstream_bare),
+              check=False)
+        g.commit(self.upstream_src, "NEWS", "later\n", "later upstream work")
+        g.git(self.upstream_src, "push", "-q", "bare", "HEAD:refs/heads/master")
 
     def ref(self, name: str):
         out = g.git(self.bare, "rev-parse", "--verify", "-q", name, check=False)
@@ -164,7 +188,7 @@ def env(tmp_path):
         FakeWorkspaces(tmp_path / "ws"), github,
         author_name="Somil Rathore", author_email="somil.rathore@arrcus.com",
     )
-    resolution = _resolution(url=remote.url)
+    resolution = _resolution(remote=remote)
     content = UpstreamMdService().render(resolution)
     target = target_from_resolution(resolution, content)
     return remote, github, publisher, target
@@ -236,7 +260,10 @@ def test_pr_body_passes_the_arcos_description_check():
     body = build_upstream_md_pr_body(_resolution(), "457f1b77da8cd329")
     assert _ci_description_check(body)
     assert "457f1b77da8c" in body
-    assert "76289208dcaa - 101 behind, 39 ARCoS-only" in body
+    assert "| Merge base | 76289208dcaa |" in body
+    assert "101 upstream commit(s) not in ARCoS, 39 ARCoS commit(s) not upstream" in body
+    assert "not a list of missing fixes" in body
+    assert "| Verification level | SHARED_HISTORY |" in body
 
 
 # -- dry run ------------------------------------------------------------------
@@ -317,7 +344,7 @@ def test_a_failed_pr_is_retried_without_pushing_again(tmp_path):
     remote = Remote(tmp_path / "remote")
     github = FakeGitHub(fail_create="Validation Failed")
     publisher = _publisher_for(tmp_path, remote, github)
-    resolution = _resolution(url=remote.url)
+    resolution = _resolution(remote=remote)
     target = target_from_resolution(resolution, UpstreamMdService().render(resolution))
 
     failed = publisher.publish(target, apply=True)
@@ -353,7 +380,7 @@ def test_an_identical_file_is_no_change(tmp_path):
     github = FakeGitHub()
     publisher = _publisher_for(tmp_path, remote, github)
     target = target_from_resolution(
-        _resolution(url=remote.url), content
+        _resolution(remote=remote), content
     )
 
     result = publisher.publish(target, apply=True)
@@ -366,7 +393,7 @@ def test_a_hand_written_file_is_a_conflict_and_is_not_replaced(tmp_path):
     remote = Remote(tmp_path / "remote", upstream_md="# Upstream\n\nhand notes\n")
     github = FakeGitHub()
     publisher = _publisher_for(tmp_path, remote, github)
-    resolution = _resolution(url=remote.url)
+    resolution = _resolution(remote=remote)
     target = target_from_resolution(resolution, UpstreamMdService().render(resolution))
 
     result = publisher.publish(target, apply=True)
@@ -379,7 +406,7 @@ def test_an_older_generated_file_is_updated(tmp_path):
     remote = Remote(tmp_path / "remote",
                     upstream_md=f"<!-- {MARKER}. -->\n\nold\n")
     publisher = _publisher_for(tmp_path, remote)
-    resolution = _resolution(url=remote.url)
+    resolution = _resolution(remote=remote)
     target = target_from_resolution(resolution, UpstreamMdService().render(resolution))
 
     result = publisher.publish(target, apply=True)
@@ -405,7 +432,7 @@ def test_a_closed_pr_is_not_reopened(tmp_path):
     github = FakeGitHub(earlier=PullRequest(number=7, state="closed",
                                             url="https://github.com/x/pull/7"))
     publisher = _publisher_for(tmp_path, remote, github)
-    resolution = _resolution(url=remote.url)
+    resolution = _resolution(remote=remote)
     target = target_from_resolution(resolution, UpstreamMdService().render(resolution))
 
     result = publisher.publish(target, apply=True)
@@ -433,7 +460,7 @@ def test_a_merged_pr_is_done_not_a_problem(tmp_path):
     github = FakeGitHub(earlier=PullRequest(number=9, state="merged",
                                             url="https://github.com/x/pull/9"))
     publisher = _publisher_for(tmp_path, remote, github)
-    resolution = _resolution(url=remote.url)
+    resolution = _resolution(remote=remote)
     target = target_from_resolution(resolution, UpstreamMdService().render(resolution))
 
     result = publisher.publish(target, apply=True)
@@ -534,7 +561,7 @@ def _targets(tmp_path, names):
     out = []
     for name in names:
         remote = Remote(tmp_path / f"remote-{name}")
-        resolution = _resolution(name, url=remote.url)
+        resolution = _resolution(name, remote=remote)
         out.append((remote, target_from_resolution(
             resolution, UpstreamMdService().render(resolution))))
     return out
@@ -699,34 +726,86 @@ def test_the_plan_decides_eligibility_and_catches_drift(tmp_path):
 REAL_OUT = Path(__file__).resolve().parents[1] / "out"
 
 
+def _real_mapping_has_levels() -> bool:
+    return (REAL_OUT / "upstream-resolutions.json").exists()
+
+
 @pytest.mark.skipif(
     not (REAL_OUT / "upstream-md-plan-bookworm.json").exists()
-    or not (REAL_OUT / "upstream-mapping.csv").exists(),
-    reason="needs the generated bookworm plan and mapping",
+    or not _real_mapping_has_levels(),
+    reason="needs a bookworm mapping and plan generated with verification levels",
 )
-def test_the_real_bookworm_plan_yields_26_proposals(tmp_path):
-    """Against the actual generated files: 27 generated, ONL-standalone excluded."""
+def test_the_real_bookworm_plan_only_proposes_proven_packages(tmp_path):
+    """Against the actual generated files: every proposal is proven, nothing drifts."""
     from apm.config import load_settings
     from apm.services.mapping_store import MappingStore
 
     plan = json.loads((REAL_OUT / "upstream-md-plan-bookworm.json").read_text())
-    for entry in plan["entries"]:
-        path = REAL_OUT / "upstream-md" / entry["package"] / "debian" / "upstream.md"
-        entry.setdefault("sha256", hashlib.sha256(path.read_bytes()).hexdigest())
     copy = tmp_path / "upstream-md-plan-bookworm.json"
     copy.write_text(json.dumps(plan))
     os.symlink(REAL_OUT / "upstream-md", tmp_path / "upstream-md")
 
+    from apm.services.comparison_store import ComparisonStore
+
+    # Wired as the container wires it: the rendered file includes the backlog
+    # from any comparison snapshot that matches the mapping's commits.
+    mapping = MappingStore(REAL_OUT / "upstream-mapping.csv",
+                           comparisons=ComparisonStore(REAL_OUT / "comparisons"))
     targets, settled = load_targets(
-        copy, MappingStore(REAL_OUT / "upstream-mapping.csv"), UpstreamMdService(),
+        copy, mapping, UpstreamMdService(),
         load_settings().upstream_md_publish["exclude"],
     )
 
     drift = [s for s in settled if s.status is PublishStatus.DRIFT]
     assert not drift, [(s.package, s.error) for s in drift]
-    assert len(targets) == 26
+    assert targets, "a regenerated bookworm plan proposes at least one package"
     assert all(t.base_branch == "aminor" for t in targets)
     assert "ONL-standalone" not in {t.package for t in targets}
-    assert {t.package for t in targets} >= {"mstpd", "linux", "libnl3"}
-    libnl = next(t for t in targets if t.package == "libnl3")
-    assert libnl.slug == "arrcus/libnl"
+    for target in targets:
+        assert target.resolution.status is ResolutionStatus.VERIFIED
+        assert target.resolution.verification_level.proves_relationship
+
+
+# -- staleness and proof (the correctness brief, J and B) ---------------------
+
+def test_an_upstream_that_moved_since_the_mapping_is_drift_not_a_pr(env):
+    remote, github, publisher, target = env
+    remote.move_upstream()
+
+    for apply in (False, True):
+        result = publisher.publish(target, apply=apply)
+        assert result.status is PublishStatus.DRIFT
+        assert "moved from" in result.error and "since the mapping" in result.error
+    assert remote.branches() == ["aminor"], "nothing was pushed"
+    assert github.created == []
+
+
+def test_a_resolution_that_only_proves_existence_is_never_proposed(tmp_path):
+    remote = Remote(tmp_path / "remote")
+    github = FakeGitHub()
+    publisher = _publisher_for(tmp_path, remote, github)
+    resolution = _resolution(remote=remote,
+                             verification_level=VerificationLevel.REF_EXISTS)
+    target = target_from_resolution(resolution, UpstreamMdService().render(resolution))
+
+    result = publisher.publish(target, apply=True)
+    assert result.status is PublishStatus.SKIPPED_NEEDS_REVIEW
+    assert "REF_EXISTS" in result.error
+    assert remote.branches() == ["aminor"] and github.created == []
+
+
+def test_the_plan_refuses_a_mapping_without_verification_levels(tmp_path):
+    resolution = _resolution(verification_level=VerificationLevel.NONE)
+    content = UpstreamMdService().render(resolution)
+    md = tmp_path / "upstream-md" / "mstpd" / "debian" / "upstream.md"
+    md.parent.mkdir(parents=True)
+    md.write_text(content)
+    plan = tmp_path / "upstream-md-plan-bookworm.json"
+    plan.write_text(json.dumps({"release": "bookworm", "entries": [{
+        "package": "mstpd", "status": "VERIFIED", "arcos_repository": "Arrcus/mstpd",
+        "base_branch": "aminor", "sha256": sha256_text(content)}]}))
+    targets, settled = load_targets(plan, FakeMapping({"mstpd": resolution}),
+                                    UpstreamMdService())
+    assert targets == []
+    assert settled[0].status is PublishStatus.SKIPPED_NEEDS_REVIEW
+    assert "regenerate" in settled[0].error

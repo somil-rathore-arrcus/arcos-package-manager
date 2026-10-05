@@ -358,10 +358,25 @@ def test_cherry_pick_does_not_push_unless_asked(app_container):
         "package": "pyrad", "release": "bookworm", "arcos_branch": "aminor",
         "upstream_repository": "https://github.com/x/y.git",
         "upstream_ref": "master", "shas": ["a" * 40],
+        "expected_base_sha": "b" * 40,
     }
     assert client.post("/api/patches/cherry-pick", json=payload).json()["pushed"] is False
     payload["push"] = True
     assert client.post("/api/patches/cherry-pick", json=payload).json()["pushed"] is True
+
+
+def test_cherry_pick_without_a_previewed_base_is_refused(app_container):
+    """The server, not the UI, insists the selection was previewed against a
+    known tip - so a stale selection cannot be applied by skipping a step."""
+    client, _ = app_container
+    response = client.post("/api/patches/cherry-pick", json={
+        "package": "pyrad", "release": "bookworm", "arcos_branch": "aminor",
+        "upstream_repository": "https://github.com/x/y.git",
+        "upstream_ref": "master", "shas": ["a" * 40], "push": True,
+    })
+    assert response.status_code == 400
+    assert response.json()["code"] == "INVALID_REQUEST"
+    assert "expected_base_sha" in response.json()["message"]
 
 
 def test_cherry_pick_onto_the_target_branch_is_rejected(app_container):

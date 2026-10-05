@@ -88,12 +88,32 @@ class UpstreamMdService:
                 f"- Branch: {_or_none(branch)}",
                 f"- Tag: {_or_none(resolution.upstream_tag)}",
                 f"- Commit: {_or_none(resolution.upstream_commit)}",
+                f"- Commit date: {_or_none(resolution.upstream_commit_date)}",
                 f"- Origin kind: {_or_none(resolution.origin_kind)}",
             ]
         else:
             lines.append(
                 "No upstream repository has been established for this package."
             )
+
+        selection = resolution.ref_selection
+        if selection is not None:
+            contains = selection.arcos_contains_base
+            lines += [
+                "",
+                "## Release reference",
+                "",
+                f"- Debian upstream version: {_or_none(selection.debian_upstream_version)}",
+                f"- Target series: {_or_none(selection.series)}",
+                f"- Upstream base tag: {_or_none(selection.base_tag)}"
+                + (f" ({selection.base_sha[:12]})" if selection.base_sha else ""),
+                f"- ARCoS contains the base tag: "
+                f"{NONE if contains is None else ('yes' if contains else 'no')}",
+                f"- Compared against: {selection.ref} ({selection.kind}, "
+                f"{selection.strategy.value})",
+                f"- Why: {_or_none(selection.reason)}",
+                f"- Fallback ref: {'yes' if selection.is_fallback else 'no'}",
+            ]
 
         lines += [
             "",
@@ -105,9 +125,22 @@ class UpstreamMdService:
             f"- Confidence: {resolution.confidence}",
             f"- Category: "
             f"{resolution.category.value if resolution.category else NONE}",
+            f"- Verification level: {resolution.verification_level.value}",
+            f"- Review reasons: "
+            f"{', '.join(r.value for r in resolution.review_reasons) or 'none'}",
         ]
         if not verified:
             lines.append(f"- Reason: {_or_none(resolution.reason)}")
+        curated = resolution.curated
+        if curated is not None:
+            lines.append(
+                f"- Curated upstream: "
+                + (f"{curated.repository} @ {curated.ref or 'HEAD'}"
+                   if curated.repository else "no upstream")
+                + (f" ({curated.reason})" if curated.reason else "")
+            )
+            if curated.conflict:
+                lines.append(f"- Curated conflict: {curated.conflict}")
 
         lines += [
             "",
@@ -118,11 +151,111 @@ class UpstreamMdService:
             f"- Verification: {_or_none(resolution.verification)}",
         ]
         if resolution.merge_base:
+            lines.append(f"- Common ancestor: {resolution.merge_base}")
+        if len(resolution.merge_bases) > 1:
+            lines.append(
+                f"- Merge bases: {', '.join(resolution.merge_bases)} "
+                f"(criss-cross history)"
+            )
+        if resolution.behind is not None or resolution.arcos_only is not None:
+            arcos = (resolution.arcos_commit or "")[:12] or "ARCOS"
+            up = (resolution.upstream_commit or "")[:12] or "UPSTREAM"
             lines += [
-                f"- Common ancestor: {resolution.merge_base}",
-                f"- Commits behind upstream: {_or_none(resolution.behind)}",
-                f"- ARCoS-only commits: {_or_none(resolution.arcos_only)}",
+                f"- Upstream commits not in ARCoS (raw): {_or_none(resolution.behind)}",
+                f"- ARCoS commits not in upstream (raw): {_or_none(resolution.arcos_only)}",
+                f"- Count basis: {_or_none(resolution.counts_basis)}; "
+                f"measured {arcos}..{up}"
+                + ("; the upstream is the Debian packaging repository, so "
+                   "packaging commits are included"
+                   if resolution.origin_kind == "debian_packaging" else "")
+                + ". These are not missing fixes - see Backlog.",
             ]
+
+        match = resolution.content_match
+        if match is not None and match.base_tag:
+            lines += [
+                "",
+                "## Content match",
+                "",
+                f"- Method: {match.method}",
+                f"- ARCoS tree compared: {_or_none(match.arcos_tree)} "
+                f"({_or_none(match.arcos_tree_label)})",
+                f"- Closest upstream tag: {match.base_tag}"
+                + (f" ({match.base_sha[:12]})" if match.base_sha else ""),
+                f"- Score: {(match.score or 0):.3f}",
+                f"- Files differing: {_or_none(match.files_differing)} of "
+                f"{_or_none(match.files_compared)}",
+                f"- Lines differing: {_or_none(match.lines_differing)}",
+                f"- Approved: "
+                + (f"yes, by {match.verified_by} on {match.verified_at} "
+                   f"({_or_none(match.approval_source)})"
+                   if match.approved else "no - not used for any comparison"),
+            ]
+            if match.approved:
+                lines.append(
+                    "- Note: there is no shared git history. Any count above is "
+                    "synthesized from this content match."
+                )
+
+        snapshot = resolution.comparison
+        if snapshot is not None:
+            lines += [
+                "",
+                "## Backlog",
+                "",
+                f"- Compared: ARCoS {snapshot.arcos_commit[:12]} against "
+                f"{snapshot.upstream_ref} {snapshot.upstream_commit[:12]}",
+                f"- Upstream base: {_or_none(snapshot.base_tag)}",
+                f"- Target series: {_or_none(snapshot.series)}",
+                f"- Relevant upstream commits: {snapshot.relevant_upstream}",
+                f"- Already present: "
+                f"{snapshot.definitely_present + snapshot.probably_present} "
+                f"(definitely {snapshot.definitely_present}, probably "
+                f"{snapshot.probably_present})",
+                f"- Missing: {snapshot.missing}",
+                f"- Unknown: {snapshot.unknown_presence}",
+                f"- Reverted upstream (net no-op): {snapshot.reverted_upstream}",
+                f"- Critical/security missing: {snapshot.critical_missing}",
+                f"- Stable-nominated missing: {snapshot.stable_missing}",
+                f"- Backport detection: {_or_none(snapshot.backport_detection)}",
+            ]
+            if snapshot.synthesized_ancestry:
+                lines.append("- Ancestry: SYNTHESIZED from an approved content match")
+            if snapshot.truncated:
+                lines.append("- Note: the range was truncated for display; "
+                             "unassessed commits are counted as Unknown")
+
+        patches = resolution.debian_patches
+        if patches is not None:
+            lines += ["", "## Debian patches", ""]
+            if not patches.available:
+                lines.append(f"- Not available: {_or_none(patches.reason)}")
+            else:
+                security = patches.security_patches
+                backports = [p for p in patches.patches
+                             if p.category == "upstream_backport"]
+                specific = [p for p in patches.patches
+                            if p.category == "debian_specific"]
+                lines += [
+                    f"- Version: {patches.version}",
+                    f"- Patches: {len(patches.patches)} (security "
+                    f"{len(security)}, upstream backports {len(backports)}, "
+                    f"Debian-specific {len(specific)})",
+                    f"- CVEs referenced: {', '.join(patches.cve_ids) or 'none'}",
+                    f"- Uploads of this upstream version: "
+                    f"{', '.join(u.version for u in patches.uploads) or NONE}",
+                ]
+                for patch in security[:20]:
+                    lines.append(
+                        f"- Security patch: {patch.name} "
+                        f"({', '.join(patch.cve_ids)})"
+                    )
+                if patches.reason:
+                    lines.append(f"- Note: {patches.reason}")
+
+        if resolution.warnings:
+            lines += ["", "## Warnings", ""]
+            lines += [f"- {w}" for w in resolution.warnings]
 
         trail = sorted({e.detail.strip() for e in resolution.evidence if e.detail})
         if trail:

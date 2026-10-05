@@ -88,16 +88,59 @@ kernel:
 # the metadata distinguishes the two cases - it has to be measured.
 ancestry:
   enabled: true
-  # Refs to try on a Debian packaging repository when testing it as the origin.
+  # Development refs of a Debian packaging repository. Tried only AFTER the
+  # release's own packaging tag (debian/<version>) and branch (debian/<codename>):
+  # debian/sid is what Debian is preparing next, not what the release ships.
   packaging_refs:
     - debian/sid
     - debian/master
+    - debian/latest
     - master
-  # Repositories too large to clone for a merge-base. The kernel's series pairing
-  # is already derived from the Debian version and cross-checked, so it needs no
-  # ancestry probe.
-  skip:
+  # Packages never probed. A skipped package cannot be VERIFIED: it reports
+  # NEEDS_REVIEW / ANCESTRY_NOT_PROBED. Empty: the probe fetches the commit
+  # graph only (tree:0) into a persistent workdir, so even the kernel is
+  # affordable after its first run.
+  skip: []
+  # Probe only the project's own repository for these, not the Debian
+  # packaging repository (the kernel's packaging repository is huge and is not
+  # what ARCoS forked).
+  primary_only:
     - linux
+  # When a curated repository shares no history and another candidate does,
+  # the row is NEEDS_REVIEW / CURATED_CONFLICT. Set true (here, or per package
+  # as allow_ancestry_replacement in overrides.yaml) to let history replace it.
+  allow_curated_replacement: false
+  # Probe results are keyed by the ARCoS commit and every candidate's commit;
+  # this TTL is a backstop for keys with an unknown commit.
+  cache_ttl_seconds: 604800
+  max_candidates: 12
+
+# Suspicious results are flagged for review, never rejected.
+plausibility:
+  behind_warning: 1000
+  arcos_only_warning: 1000
+  merge_base_age_years: 4
+
+# Content-based base detection for forks that share no git history.
+content_base:
+  enabled: true
+  max_tags: 150
+  # Below this tree-similarity score no release is proposed as the base.
+  min_score: 0.6
+
+comparison:
+  # Upstream commits checked with git apply / line comparison per comparison;
+  # beyond this they are UNKNOWN, never assumed missing.
+  content_check_limit: 1000
+
+# External security evidence. Debian's own patches and changelog are always
+# read; OSV.dev is queried for vulnerabilities affecting the upstream base.
+security:
+  osv:
+    enabled: true
+    api_url: https://api.osv.dev/v1
+    timeout_seconds: 20
+    cache_ttl_seconds: 86400
 
 # Repositories that require the configured access bridge rather than direct
 # access from the machine running this tool. Regular expressions, matched against

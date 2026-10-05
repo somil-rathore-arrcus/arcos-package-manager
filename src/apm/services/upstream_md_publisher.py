@@ -223,6 +223,12 @@ def load_targets(plan_path: Path, mapping, renderer,
                                     PublishStatus.SKIPPED_NEEDS_REVIEW),
                    f"the mapping now says {resolution.status.value}", **common)
             continue
+        if not resolution.verification_level.proves_relationship:
+            settle(package, PublishStatus.SKIPPED_NEEDS_REVIEW,
+                   f"verification level {resolution.verification_level.value} "
+                   f"does not prove the relationship (a mapping written before "
+                   f"verification levels existed?); regenerate it", **common)
+            continue
         if renderer.render(resolution) != content:
             settle(package, PublishStatus.DRIFT,
                    "the mapping has changed since the file was generated; "
@@ -325,6 +331,15 @@ class UpstreamMdPublisher:
             )
             result.error = f"mapping status is {target.status.value}"
             return result
+        if target.resolution is not None and \
+                not target.resolution.verification_level.proves_relationship:
+            result.status = PublishStatus.SKIPPED_NEEDS_REVIEW
+            result.error = (
+                f"verification level "
+                f"{target.resolution.verification_level.value} does not prove "
+                f"the relationship"
+            )
+            return result
 
         validate_branch(branch, target.base_branch)
         if not target.slug or not target.repository_url or not target.base_branch:
@@ -372,6 +387,12 @@ class UpstreamMdPublisher:
         result.base_moved = bool(
             target.pinned_commit and not tip.startswith(target.pinned_commit)
         )
+
+        moved = self._upstream_moved(workspace, target)
+        if moved:
+            result.status = PublishStatus.DRIFT
+            result.error = moved
+            return False
 
         existing_branch = workspace.remote_ref(url, f"refs/heads/{branch}")
         if existing_branch is not None:
@@ -460,6 +481,41 @@ class UpstreamMdPublisher:
             return False
         result.pushed = True
         return True
+
+    def _upstream_moved(self, workspace, target: PublishTarget) -> Optional[str]:
+        """Why the file would record a stale upstream, or None if it would not.
+
+        The file states "this upstream ref, at this commit". If the ref has
+        moved since the mapping was made, that statement - and every count
+        beside it - describes a commit that is no longer the tip, so the
+        package goes back for regeneration instead of being proposed.
+        """
+        resolution = target.resolution
+        if resolution is None or not resolution.upstream_repository:
+            return None
+        recorded = resolution.upstream_commit or ""
+        ref = resolution.upstream_ref or ""
+        if not recorded or not ref:
+            return "the mapping records no upstream commit to check against"
+        url = resolution.upstream_repository.url
+        if resolution.upstream_tag:
+            names = [f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}"]
+        else:
+            names = [f"refs/heads/{ref}"]
+        current = None
+        for name in names:
+            current = workspace.remote_ref(url, name)
+            if current:
+                break
+        if current is None:
+            return f"upstream {ref} no longer exists on {url}; regenerate"
+        if not (current.startswith(recorded) or recorded.startswith(current)):
+            return (
+                f"upstream {ref} moved from {recorded[:12]} to {current[:12]} "
+                f"since the mapping was made; re-run resolve-release and "
+                f"generate-upstream-md, then review"
+            )
+        return None
 
     def _settled_by_earlier_pr(self, target: PublishTarget,
                                result: PublishResult) -> bool:

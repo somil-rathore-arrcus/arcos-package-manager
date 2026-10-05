@@ -81,8 +81,12 @@ export function DashboardPage() {
       upstream_repository: current.upstream_repository.url,
       upstream_ref: current.upstream_ref,
       shas: Array.from(selected),
+      // What the selection was made against; the server re-validates it
+      // against the branches as they are now.
+      comparison_arcos_commit: comparison.data?.arcos_commit ?? undefined,
+      comparison_upstream_commit: comparison.data?.upstream_commit ?? undefined,
     }
-  }, [resolution.data, selection, selected])
+  }, [resolution.data, selection, selected, comparison.data])
 
   const preview = useAsyncAction(async () => {
     if (!patchRequest) return null
@@ -90,10 +94,22 @@ export function DashboardPage() {
   })
 
   const apply = useAsyncAction(async () => {
-    if (!patchRequest) return null
-    const result = await api.cherryPick({ ...patchRequest, push: true })
+    if (!patchRequest || !preview.data?.base_sha) return null
+    // Applied only onto the exact tip the preview ran on; the server refuses
+    // if the target branch has moved since.
+    const result = await api.cherryPick({
+      ...patchRequest, push: true, expected_base_sha: preview.data.base_sha,
+    })
     setCherryPick(result)
     return result
+  })
+
+  const approveBase = useAsyncAction(async (tag: string, verifiedBy: string) => {
+    await api.approveContentBase({
+      package: selection.pkg, release: selection.release, tag,
+      verified_by: verifiedBy, confirm: true,
+    })
+    return tag
   })
 
   const createPr = useAsyncAction(async () => {
@@ -183,12 +199,21 @@ export function DashboardPage() {
 
         <ErrorAlert error={packages.error} onRetry={packages.reload} />
         <ErrorAlert error={resolution.error} />
+        <ErrorAlert error={approveBase.error} />
+        {approveBase.data && (
+          <div className="alert info"><p>
+            Approval of {approveBase.data} recorded. It takes effect when{' '}
+            {selection.pkg} is next resolved (apm resolve-release --package {selection.pkg} --no-discover).
+          </p></div>
+        )}
 
         {resolution.data && (
           <ResolutionCard
             resolution={resolution.data}
             onCompare={() => comparison.run()}
             comparing={comparison.loading}
+            onApproveContentBase={(tag, who) => approveBase.run(tag, who)}
+            approving={approveBase.loading}
           />
         )}
 

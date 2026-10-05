@@ -6,9 +6,13 @@ from typing import List
 
 from fastapi import APIRouter, Depends, Query
 
+from ...domain.enums import ErrorCode
 from ...domain.models import ResolutionEvidence, UpstreamResolution
+from ...services.upstream_service import UpstreamServiceError
 from ..deps import container
-from ..schemas import ManualUpstreamRequest, ResolveRequest
+from ..schemas import (
+    ContentBaseApprovalRequest, ManualUpstreamRequest, ResolveRequest,
+)
 
 router = APIRouter(tags=["upstream"])
 
@@ -49,3 +53,43 @@ def evidence(
     app=Depends(container),
 ):
     return app.upstream.resolve(package, release).evidence
+
+
+@router.post("/upstream/content-base/approve")
+def approve_content_base(request: ContentBaseApprovalRequest,
+                         app=Depends(container)):
+    """Record a person's approval of a content-matched base tag.
+
+    For a fork that shares no git history. The approval names who decided, and
+    takes effect when the package is next resolved; nothing is re-resolved or
+    compared here.
+    """
+    if not request.confirm:
+        raise UpstreamServiceError(
+            ErrorCode.INVALID_REQUEST, "Approving a content base needs confirm=true.")
+    resolution = app.upstream.resolve(request.package, request.release)
+    match = resolution.content_match
+    if match is None or not match.candidates:
+        raise UpstreamServiceError(
+            ErrorCode.INVALID_REQUEST,
+            f"No content match is recorded for {request.package}; it needs "
+            f"NO_SHARED_HISTORY and a resolution run first.")
+    tag = request.tag or match.base_tag
+    candidate = next((c for c in match.candidates if c.tag == tag), None)
+    if candidate is None:
+        raise UpstreamServiceError(
+            ErrorCode.INVALID_REQUEST, f"{tag} was not among the tags compared.")
+    listing = app.verifier.list_refs(resolution.upstream_repository.url)
+    sha = listing.tags.get(tag) if listing.ok else None
+    if not sha:
+        raise UpstreamServiceError(
+            ErrorCode.INVALID_REF, f"Tag {tag} could not be resolved upstream.",
+            listing.error or "")
+    return app.approvals.approve(request.package, request.release, {
+        "repository": resolution.upstream_repository.url, "base_tag": tag,
+        "base_sha": sha, "method": candidate.method, "score": candidate.score,
+        "files_compared": candidate.files_compared,
+        "files_differing": candidate.files_differing,
+        "arcos_tree": candidate.arcos_tree, "arcos_commit": resolution.arcos_commit,
+        "verified_by": request.verified_by, "note": request.note or "",
+    })

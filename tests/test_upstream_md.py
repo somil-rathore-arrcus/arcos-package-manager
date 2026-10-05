@@ -46,7 +46,10 @@ def test_render_contains_every_section():
         assert heading in text
     assert "https://github.com/wichert/pyrad.git" in text
     assert "- Branch: master" in text
-    assert "- Commits behind upstream: 126" in text
+    assert "- Upstream commits not in ARCoS (raw): 126" in text
+    assert "- ARCoS commits not in upstream (raw): 25" in text
+    assert "These are not missing fixes" in text
+    assert "- Commits behind upstream" not in text
 
 
 def test_render_is_deterministic():

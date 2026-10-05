@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# The apm CLI from this checkout, run with the project venv and the host
+# runtime defaults (scripts/env.sh). Same commands as `apm` in the container:
+#   scripts/apm doctor --repo Arrcus/mstpd
+#   scripts/apm publish-upstream-md --release bookworm --package mstpd
+set -euo pipefail
+. "$(dirname "$0")/env.sh"
+[ -x "$APM_VENV/bin/python" ] || { echo "no venv: run scripts/setup-venv.sh first" >&2; exit 1; }
+cd "$APM_ROOT"
+exec "$APM_VENV/bin/python" -m apm "$@"

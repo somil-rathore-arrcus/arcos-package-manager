@@ -48,7 +48,49 @@ def create_app() -> FastAPI:
         app.include_router(module.router, prefix=API_PREFIX)
 
     errors.install(app)
+    # Last, so every /api route is matched before the dashboard's catch-all.
+    _serve_frontend(app)
     return app
+
+
+def _serve_frontend(app: FastAPI) -> None:
+    """Serve the built dashboard from the same process and port as the API.
+
+    For a host without Docker or a separate web server: one uvicorn process
+    serves frontend/dist (or APM_FRONTEND_DIST) at / and the API at /api, so
+    the browser sees one origin, exactly as it does behind nginx. Absent a
+    build, nothing is mounted and the API runs alone.
+    """
+    from pathlib import Path
+
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    from ..config import ROOT
+
+    configured = os.environ.get("APM_FRONTEND_DIST", "").strip()
+    dist = Path(configured).expanduser() if configured else ROOT / "frontend" / "dist"
+    index = dist / "index.html"
+    if not index.is_file():
+        log.info("no frontend build at %s; serving the API only", dist)
+        return
+    root = dist.resolve()
+    if (dist / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def dashboard(path: str):
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(status_code=404, detail={
+                "code": "NOT_FOUND", "message": f"No API route /{path}."})
+        candidate = (root / path).resolve()
+        if path and candidate.is_file() and root in candidate.parents:
+            return FileResponse(candidate)
+        # Client-side routes all load the single-page app.
+        return FileResponse(index)
+
+    log.info("serving the dashboard from %s", dist)
 
 
 app = create_app()

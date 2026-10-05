@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Any, List, Optional
 
 
 class Category(str, Enum):
@@ -29,10 +29,16 @@ class Category(str, Enum):
 
 
 class Status(str, Enum):
-    """Whether the resolved upstream was confirmed to exist."""
+    """Whether the upstream relationship is proven. See domain ResolutionStatus.
+
+    FAILED means the resolver could not finish (a probe or network error), which
+    is different from a finding such as "no shared history". UNRESOLVED is kept
+    so older mappings still read; the resolver no longer produces it.
+    """
 
     VERIFIED = "VERIFIED"
     NEEDS_REVIEW = "NEEDS_REVIEW"
+    FAILED = "FAILED"
     UNRESOLVED = "UNRESOLVED"
     NO_UPSTREAM = "NO_UPSTREAM"
 
@@ -105,6 +111,11 @@ class DebianSource:
         v = self.version.split(":", 1)[-1]
         return v.rsplit("-", 1)[0] if "-" in v else v
 
+    @property
+    def codename(self) -> str:
+        """bookworm-security -> bookworm."""
+        return (self.suite or "").split("-", 1)[0]
+
 
 @dataclass
 class Upstream:
@@ -156,11 +167,48 @@ class Resolution:
     evidence: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
+    # How strongly the relationship is proven (domain VerificationLevel value),
+    # kept apart from status and from confidence.
+    verification_level: str = "NONE"
+    # ReviewReason codes: why this row is not VERIFIED.
+    review_reasons: list[str] = field(default_factory=list)
+    # Plausibility checks: shown for review, never a silent rejection.
+    warnings: list[str] = field(default_factory=list)
+    merge_bases: list[str] = field(default_factory=list)
+    counts_basis: str = ""
+    upstream_commit_date: Optional[str] = None
+    # Domain objects (apm.domain.models) carried through unchanged, so the
+    # adapter has nothing to reinterpret.
+    ref_selection: Any = None
+    curated: Any = None
+    content_match: Any = None
+    debian_patches: Any = None
+    candidates: List[Any] = field(default_factory=list)
+
     def note(self, text: str) -> None:
         self.notes.append(text)
 
     def record(self, text: str) -> None:
         self.evidence.append(text)
+
+    def flag(self, reason, note: Optional[str] = None) -> None:
+        """Record why this row is not VERIFIED, as a code and in words."""
+        code = getattr(reason, "value", reason)
+        if code not in self.review_reasons:
+            self.review_reasons.append(code)
+        if note:
+            self.note(note)
+
+    def clear(self, reason, note_prefix: str = "") -> None:
+        """Withdraw a review reason that later evidence answered."""
+        code = getattr(reason, "value", reason)
+        self.review_reasons = [r for r in self.review_reasons if r != code]
+        if note_prefix:
+            self.notes = [n for n in self.notes if not n.startswith(note_prefix)]
+
+    def warn(self, text: str) -> None:
+        if text not in self.warnings:
+            self.warnings.append(text)
 
     @property
     def reason(self) -> str:

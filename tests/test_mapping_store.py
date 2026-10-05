@@ -11,7 +11,7 @@ import textwrap
 
 import pytest
 
-from apm.domain.enums import PackageCategory, ResolutionStatus
+from apm.domain.enums import PackageCategory, ResolutionStatus, VerificationLevel
 from apm.services.mapping_store import MappingStore
 
 HEADER = (
@@ -47,7 +47,9 @@ def test_loads_every_row(store):
     }
 
 
-def test_verified_row_is_comparable_and_complete(store):
+def test_a_mapping_from_before_verification_levels_reads_but_proves_nothing(store):
+    """An old CSV still loads - its counts under the old column names too - but
+    a row that never recorded how it was verified is not trusted to compare."""
     resolution = store.get("pyrad", "bookworm")
     assert resolution.status is ResolutionStatus.VERIFIED
     assert resolution.upstream_repository.url == "https://github.com/wichert/pyrad.git"
@@ -57,6 +59,23 @@ def test_verified_row_is_comparable_and_complete(store):
     assert resolution.debian.source_package == "pyrad"
     assert resolution.debian.version == "2.1-3"
     assert resolution.origin_kind == "project"
+    assert resolution.verification_level is VerificationLevel.NONE
+    assert resolution.comparable is False
+
+
+def test_a_current_csv_row_with_shared_history_is_comparable(tmp_path):
+    from apm.report import BEHIND, AHEAD
+    header = HEADER.replace("Commits Behind", BEHIND).replace(
+        "ARCoS-only Commits", AHEAD).rstrip("\n") + \
+        ",Verification Level,Review Reasons,Warnings,Counts Basis,Merge Bases\n"
+    row = ROWS.splitlines()
+    first = "\n".join(row[:2]) + ',SHARED_HISTORY,,,"raw counts",984ad177f02d\n'
+    path = tmp_path / "upstream-mapping.csv"
+    path.write_text(header + first, encoding="utf-8")
+    resolution = MappingStore(path).get("pyrad", "bookworm")
+    assert resolution.verification_level is VerificationLevel.SHARED_HISTORY
+    assert resolution.behind == 109
+    assert resolution.merge_bases == ["984ad177f02d"]
     assert resolution.comparable is True
 
 

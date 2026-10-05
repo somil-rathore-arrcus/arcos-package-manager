@@ -29,7 +29,9 @@ from .. import links
 from ..config import ROOT, load_packages
 from ..domain.enums import (
     PackageCategory, ResolutionMethod, ResolutionMode, ResolutionStatus,
+    ReviewReason, VerificationLevel,
 )
+from ..report import AHEAD, BEHIND, LEGACY_AHEAD, LEGACY_BEHIND
 from ..domain.models import (
     PackageSource, Repository, ResolutionEvidence, UpstreamCandidate,
     UpstreamResolution,
@@ -39,13 +41,23 @@ from .adapters import rejected_candidates
 log = logging.getLogger(__name__)
 
 DEFAULT_PATH = ROOT / "out" / "upstream-mapping.csv"
+JSON_NAME = "upstream-resolutions.json"
 
 
 class MappingStore:
-    """Read-only view of the generated mapping, reloaded when the file changes."""
+    """Read-only view of the generated mapping, reloaded when the file changes.
 
-    def __init__(self, path: Optional[Path] = None) -> None:
+    upstream-resolutions.json, written in the same run as the CSV, is read when
+    it exists: it carries every field at full fidelity, including the
+    verification evidence the CSV can only summarise. The CSV is the fallback
+    for a mapping written before it existed.
+    """
+
+    def __init__(self, path: Optional[Path] = None, comparisons=None) -> None:
         self.path = Path(path or DEFAULT_PATH)
+        self.json_path = self.path.with_name(JSON_NAME)
+        # ComparisonStore: snapshots attached only while their commits match.
+        self.comparisons = comparisons
         self._lock = threading.Lock()
         self._rows: Dict[Tuple[str, str], UpstreamResolution] = {}
         self._mtime: Optional[float] = None
@@ -55,12 +67,18 @@ class MappingStore:
 
     @property
     def available(self) -> bool:
-        return self.path.exists()
+        return self.path.exists() or self.json_path.exists()
+
+    def _source(self) -> Optional[Path]:
+        if self.json_path.exists():
+            return self.json_path
+        return self.path if self.path.exists() else None
 
     def _ensure_loaded(self) -> None:
-        if not self.path.exists():
+        source = self._source()
+        if source is None:
             return
-        mtime = self.path.stat().st_mtime
+        mtime = source.stat().st_mtime
         if self._mtime == mtime and self._rows:
             return
         with self._lock:
@@ -68,13 +86,21 @@ class MappingStore:
                 return
             self._packages = {p.name: p for p in load_packages()}
             rows: Dict[Tuple[str, str], UpstreamResolution] = {}
-            with self.path.open(encoding="utf-8") as handle:
-                for record in csv.DictReader(handle):
-                    resolution = self._to_resolution(record)
+            if source == self.json_path:
+                import json
+
+                payload = json.loads(source.read_text(encoding="utf-8"))
+                for item in payload.get("resolutions", []):
+                    resolution = UpstreamResolution.model_validate(item)
                     rows[(resolution.package, resolution.debian_release)] = resolution
+            else:
+                with source.open(encoding="utf-8") as handle:
+                    for record in csv.DictReader(handle):
+                        resolution = self._to_resolution(record)
+                        rows[(resolution.package, resolution.debian_release)] = resolution
             self._rows = rows
             self._mtime = mtime
-            log.info("loaded %d mapping rows from %s", len(rows), self.path)
+            log.info("loaded %d mapping rows from %s", len(rows), source)
 
     def reload(self) -> None:
         self._mtime = None
@@ -82,14 +108,20 @@ class MappingStore:
 
     # -- reading -----------------------------------------------------------
 
+    def _attach(self, resolution: UpstreamResolution) -> UpstreamResolution:
+        copy = resolution.model_copy(deep=True)
+        if self.comparisons is not None:
+            copy.comparison = self.comparisons.for_resolution(copy)
+        return copy
+
     def get(self, package: str, release: str) -> Optional[UpstreamResolution]:
         self._ensure_loaded()
         found = self._rows.get((package, release))
-        return found.model_copy(deep=True) if found else None
+        return self._attach(found) if found else None
 
     def all(self) -> List[UpstreamResolution]:
         self._ensure_loaded()
-        return [r.model_copy(deep=True) for r in self._rows.values()]
+        return [self._attach(r) for r in self._rows.values()]
 
     def describe(self) -> dict:
         self._ensure_loaded()
@@ -98,7 +130,7 @@ class MappingStore:
         statuses = Counter(r.status.value for r in self._rows.values())
         return {
             "available": self.available,
-            "path": str(self.path),
+            "path": str(self._source() or self.path),
             "rows": len(self._rows),
             "generated_at": (
                 datetime.fromtimestamp(self._mtime, tz=timezone.utc).isoformat()
@@ -199,8 +231,15 @@ class MappingStore:
             upstream_commit=_or_none(record.get("Upstream Commit")),
             origin_kind=_or_none(record.get("Origin Kind")),
             merge_base=_or_none(record.get("Merge Base")),
-            behind=_as_int(record.get("Commits Behind")),
-            arcos_only=_as_int(record.get("ARCoS-only Commits")),
+            behind=_as_int(record.get(BEHIND) or record.get(LEGACY_BEHIND)),
+            arcos_only=_as_int(record.get(AHEAD) or record.get(LEGACY_AHEAD)),
+            verification_level=_level(record.get("Verification Level")),
+            review_reasons=_reasons(record.get("Review Reasons")),
+            warnings=[w for w in (record.get("Warnings") or "").split("\n")
+                      if w.strip()],
+            counts_basis=(record.get("Counts Basis") or "").strip(),
+            upstream_commit_date=_or_none(record.get("Upstream Commit Date")),
+            merge_bases=(record.get("Merge Bases") or "").split(),
             reason=_or_none(record.get("Reason")) or (notes[0] if notes else None),
             evidence_source=(record.get("Evidence Source") or "").strip(),
             evidence_url=(record.get("Evidence URL") or "").strip(),
@@ -210,6 +249,24 @@ class MappingStore:
             notes=notes,
             resolved_at=None,
         )
+
+
+def _level(value: Optional[str]) -> VerificationLevel:
+    """A mapping written before verification levels existed proves nothing."""
+    try:
+        return VerificationLevel((value or "").strip())
+    except ValueError:
+        return VerificationLevel.NONE
+
+
+def _reasons(value: Optional[str]) -> List[ReviewReason]:
+    out = []
+    for item in (value or "").replace(",", " ").split():
+        try:
+            out.append(ReviewReason(item))
+        except ValueError:
+            continue
+    return out
 
 
 def _or_none(value: Optional[str]) -> Optional[str]:

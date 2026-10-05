@@ -127,6 +127,10 @@ class Environment:
     git_long_timeout: int = 900
     committer_name: str = "ARCoS Package Manager"
     committer_email: str = "arcos-package-manager@localhost"
+    # The key git itself uses for ssh:// remotes when it runs locally - the
+    # container on the host that holds repository access mounts it read-only.
+    git_ssh_identity_file: str = ""
+    git_known_hosts_file: str = ""
 
     @classmethod
     def from_env(cls) -> "Environment":
@@ -168,6 +172,8 @@ class Environment:
             committer_email=env.get(
                 "APM_COMMITTER_EMAIL", "arcos-package-manager@localhost"
             ),
+            git_ssh_identity_file=env.get("APM_GIT_SSH_IDENTITY_FILE", ""),
+            git_known_hosts_file=env.get("APM_GIT_KNOWN_HOSTS_FILE", ""),
         )
 
     def transports(self, settings: Optional["Settings"] = None) -> Transports:
@@ -184,6 +190,8 @@ class Environment:
             backend=self.git_backend,
             private_patterns=patterns,
             timeout=self.git_timeout,
+            git_ssh_identity=self.git_ssh_identity_file,
+            git_known_hosts=self.git_known_hosts_file,
         )
 
     def redacted(self) -> dict:
@@ -195,6 +203,7 @@ class Environment:
             "ssh_proxy_jump": self.ssh.proxy_jump or None,
             "ssh_password_set": bool(self.ssh.password),
             "github_token_set": bool(self.github_token),
+            "git_ssh_identity_set": bool(self.git_ssh_identity_file),
             "cache_dir": str(self.cache_dir),
         }
 

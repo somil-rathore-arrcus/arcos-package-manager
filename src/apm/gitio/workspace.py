@@ -206,36 +206,89 @@ class GitWorkspace:
 
     def fetch_side(self, name: str, url: str, ref: str,
                    blobless: bool = True, depth: Optional[int] = None) -> str:
-        """Fetch a side and return the commit it resolves to."""
+        """Fetch a side and return the commit it resolves to.
+
+        Peeled: an annotated tag's FETCH_HEAD is the tag object, and comparing
+        that with the commit ls-remote reported would make every tag look as
+        though it had moved.
+        """
         result = self.fetch(name, url, ref, blobless=blobless, depth=depth)
         if not result.ok:
             raise GitWorkspaceError(
                 f"could not fetch {ref} from {url}", result.stderr.strip(),
                 timed_out=_is_timeout(result.stderr),
             )
-        return self.rev_parse("FETCH_HEAD")
+        return self.rev_parse("FETCH_HEAD^{commit}")
 
     # -- reading -----------------------------------------------------------
 
     def rev_parse(self, rev: str) -> str:
         return self._run(f"rev-parse {shlex.quote(rev)}", label="rev-parse").text
 
-    def merge_base(self, a: str, b: str) -> Optional[str]:
+    def merge_bases(self, a: str, b: str) -> List[str]:
+        """Every best common ancestor (merge-base --all); [] when there is none.
+
+        git exits 1 with no output when the histories are unrelated, and with
+        an error for anything else. The two are opposite answers - "imported,
+        not forked" versus "could not tell" - so only the first returns [].
+        """
         result = self._run(
-            f"merge-base {shlex.quote(a)} {shlex.quote(b)}",
+            f"merge-base --all {shlex.quote(a)} {shlex.quote(b)}",
             check=False, label="merge-base",
         )
-        return result.text or None
+        if result.ok:
+            return result.text.split()
+        if not result.stderr.strip() and not result.text:
+            return []
+        raise GitWorkspaceError("git merge-base failed", result.stderr.strip())
+
+    def merge_base(self, a: str, b: str) -> Optional[str]:
+        bases = self.merge_bases(a, b)
+        return bases[0] if bases else None
+
+    def is_ancestor(self, a: str, b: str) -> bool:
+        """Whether `a` is reachable from `b`. Raises when git cannot say."""
+        result = self._run(
+            f"merge-base --is-ancestor {shlex.quote(a)} {shlex.quote(b)}",
+            check=False, label="merge-base --is-ancestor",
+        )
+        if result.ok:
+            return True
+        if not result.stderr.strip():
+            return False
+        raise GitWorkspaceError("git merge-base --is-ancestor failed",
+                                result.stderr.strip())
 
     def count(self, rev_range: str, no_merges: bool = False) -> int:
+        """rev-list --count. A failure raises: it is not zero commits."""
         flags = "--no-merges " if no_merges else ""
         result = self._run(
-            f"rev-list --count {flags}{rev_range}", check=False, label="rev-list"
+            f"rev-list --count {flags}{rev_range}", timeout=self.long_timeout,
+            label="rev-list --count",
         )
         try:
             return int(result.text)
-        except ValueError:
-            return 0
+        except ValueError as exc:
+            raise GitWorkspaceError(
+                f"git rev-list --count {rev_range} returned {result.text!r}"
+            ) from exc
+
+    def rev_list(self, rev_range: str, no_merges: bool = True,
+                 limit: Optional[int] = None) -> List[str]:
+        flags = "--no-merges " if no_merges else ""
+        if limit:
+            flags += f"-n {int(limit)} "
+        result = self._run(
+            f"rev-list {flags}{rev_range}", timeout=self.long_timeout,
+            label="rev-list",
+        )
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+    def commit_date(self, rev: str) -> Optional[str]:
+        result = self._run(
+            f"log -1 --format=%cI {shlex.quote(rev)}", check=False, label="log",
+        )
+        return result.text or None
 
     def log(self, rev_range: str, limit: Optional[int] = None,
             no_merges: bool = True) -> List[LogEntry]:
@@ -295,7 +348,7 @@ class GitWorkspace:
     def show_stat(self, rev_range: str) -> List[dict]:
         result = self._run(
             f"diff --numstat {rev_range}", timeout=self.long_timeout,
-            check=False, label="diff",
+            label="diff --numstat",
         )
         changes = []
         for line in result.stdout.splitlines():
@@ -312,7 +365,7 @@ class GitWorkspace:
     def list_branches(self, url: str) -> List[str]:
         result = self._run(
             f"ls-remote --heads {shlex.quote(url)}",
-            timeout=self.long_timeout, check=False, label="ls-remote",
+            timeout=self.long_timeout, label="ls-remote",
         )
         return [
             line.split("refs/heads/", 1)[1].strip()
@@ -379,10 +432,11 @@ class GitWorkspace:
             raise GitWorkspaceError("git commit failed", result.stderr.strip())
         return self.rev_parse("HEAD")
 
-    def push(self, url: str, branch: str, force: bool = False) -> GitResult:
-        flag = "--force-with-lease " if force else ""
+    def push(self, url: str, branch: str) -> GitResult:
+        """Push HEAD to a NEW branch. There is no force option: an existing
+        branch that HEAD does not descend from rejects the push."""
         return self._run(
-            f"push {flag}{shlex.quote(url)} "
+            f"push {shlex.quote(url)} "
             f"{shlex.quote('HEAD')}:{shlex.quote('refs/heads/' + branch)}",
             timeout=self.long_timeout, check=False, label="push",
         )

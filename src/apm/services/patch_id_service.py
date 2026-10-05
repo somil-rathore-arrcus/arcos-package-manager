@@ -48,15 +48,22 @@ class PatchIdService:
         # spending minutes to find a handful of backports.
         self.max_total_commits = max_total_commits
 
-    def compare(self, workspace: GitWorkspace, merge_base: str,
-                upstream_head: str, arcos_head: str,
+    def compare(self, workspace: GitWorkspace, upstream_range: str,
+                arcos_range: str,
                 total_commits: Optional[int] = None,
                 expected_upstream: Optional[int] = None,
                 expected_arcos: Optional[int] = None) -> PatchEquivalence:
+        """Match the two sides of a comparison by patch-id.
+
+        The ranges are head-based - `UPSTREAM ^ARCOS` and `ARCOS ^UPSTREAM` -
+        so the sets being matched are exactly "upstream changes ARCoS cannot
+        reach" and "ARCoS changes upstream cannot reach", however many merge
+        bases the histories have.
+        """
         result = PatchEquivalence()
-        if not merge_base:
+        if not upstream_range or not arcos_range:
             result.available = False
-            result.reason = "no common ancestor, so patch equivalence is undefined"
+            result.reason = "no comparison range, so patch equivalence is undefined"
             return result
 
         if total_commits and total_commits > self.max_total_commits:
@@ -69,12 +76,10 @@ class PatchIdService:
 
         try:
             result.upstream_patch_ids = workspace.patch_ids(
-                f"{merge_base}..{upstream_head}", limit=self.limit,
-                timeout=self.timeout,
+                upstream_range, limit=self.limit, timeout=self.timeout,
             )
             result.arcos_patch_ids = workspace.patch_ids(
-                f"{merge_base}..{arcos_head}", limit=self.limit,
-                timeout=self.timeout,
+                arcos_range, limit=self.limit, timeout=self.timeout,
             )
         except Exception as exc:  # noqa: BLE001 - reported, never fatal
             log.warning("patch-id comparison failed: %s", exc)

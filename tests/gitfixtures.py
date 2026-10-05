@@ -36,6 +36,7 @@ def init(path: Path) -> Path:
 
 def commit(repo: Path, filename: str, content: str, subject: str,
            body: str = "") -> str:
+    (repo / filename).parent.mkdir(parents=True, exist_ok=True)
     (repo / filename).write_text(content)
     git(repo, "add", filename)
     message = f"{subject}\n\n{body}" if body else subject

@@ -33,7 +33,7 @@ def test_matches_an_upstream_commit_to_its_backport():
         upstream={"upstream1": "patchA", "upstream2": "patchB"},
         arcos={"arcos1": "patchA"},
     )
-    result = PatchIdService().compare(workspace, "base", "up", "arcos")
+    result = PatchIdService().compare(workspace, "up ^arcos", "arcos ^up")
 
     assert result.available is True
     assert result.equivalent == {"upstream1": "arcos1"}
@@ -41,17 +41,17 @@ def test_matches_an_upstream_commit_to_its_backport():
     assert result.is_backported("upstream2") is False
 
 
-def test_without_a_merge_base_equivalence_is_undefined_not_empty():
-    result = PatchIdService().compare(FakeWorkspace(), "", "up", "arcos")
+def test_without_a_range_equivalence_is_undefined_not_empty():
+    result = PatchIdService().compare(FakeWorkspace(), "", "")
     assert result.available is False
-    assert "no common ancestor" in result.reason
+    assert "undefined" in result.reason
 
 
 def test_a_timeout_is_reported_rather_than_raised():
     workspace = FakeWorkspace(
         raises=GitWorkspaceError("patch-id did not complete", timed_out=True)
     )
-    result = PatchIdService(timeout=1).compare(workspace, "base", "up", "arcos")
+    result = PatchIdService(timeout=1).compare(workspace, "up ^arcos", "arcos ^up")
 
     assert result.available is False
     assert "patch-id could not be computed" in result.reason
@@ -63,7 +63,7 @@ def test_an_enormous_range_is_skipped_before_any_diffing():
     workspace = FakeWorkspace(upstream={"a": "p"}, arcos={"b": "p"})
     service = PatchIdService(max_total_commits=100)
 
-    result = service.compare(workspace, "base", "up", "arcos", total_commits=50_000)
+    result = service.compare(workspace, "up ^arcos", "arcos ^up", total_commits=50_000)
 
     assert result.available is False
     assert "beyond the 100" in result.reason
@@ -73,7 +73,7 @@ def test_an_enormous_range_is_skipped_before_any_diffing():
 def test_a_range_within_the_limit_still_runs():
     workspace = FakeWorkspace(upstream={"a": "p"}, arcos={"b": "p"})
     result = PatchIdService(max_total_commits=100).compare(
-        workspace, "base", "up", "arcos", total_commits=99
+        workspace, "up ^arcos", "arcos ^up", total_commits=99
     )
     assert result.available is True
     assert result.equivalent == {"a": "b"}
@@ -81,7 +81,7 @@ def test_a_range_within_the_limit_still_runs():
 
 def test_nothing_on_the_arcos_side_means_no_backports_but_still_available():
     workspace = FakeWorkspace(upstream={"a": "p"}, arcos={})
-    result = PatchIdService().compare(workspace, "base", "up", "arcos")
+    result = PatchIdService().compare(workspace, "up ^arcos", "arcos ^up")
     assert result.available is True
     assert result.equivalent == {}
 
@@ -90,5 +90,5 @@ def test_one_arcos_commit_is_not_claimed_by_two_upstream_commits():
     workspace = FakeWorkspace(
         upstream={"u1": "same", "u2": "same"}, arcos={"a1": "same"},
     )
-    result = PatchIdService().compare(workspace, "base", "up", "arcos")
+    result = PatchIdService().compare(workspace, "up ^arcos", "arcos ^up")
     assert result.equivalent == {"u1": "a1", "u2": "a1"}

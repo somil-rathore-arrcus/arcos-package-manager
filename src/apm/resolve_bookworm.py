@@ -26,13 +26,11 @@ from .config import (
 )
 from .discovery.catalog import build_catalog, write_catalog
 from .discovery.gitmodules import discover
-from .gitio.ancestry import AncestryChecker
-from .gitio.verify import Verifier
 from .models import Status
 from .report import (
-    to_row, write_csv_rows, write_release_reports, write_xlsx_rows,
+    to_row, write_csv_rows, write_release_reports, write_resolutions_json,
+    write_xlsx_rows,
 )
-from .resolve import Resolver
 
 log = logging.getLogger("apm")
 
@@ -77,20 +75,32 @@ def run(release: str = "bookworm", out_dir: Path = None, rediscover: bool = True
 
     print(f"\n{len(packages)} packages in {release} ({manifest_branch})\n")
 
-    ancestry = AncestryChecker(
-        transports, env.cache_dir / "ancestry",
-        enabled=settings.ancestry.get("enabled", True) and ancestry_enabled,
-        timeout=env.git_long_timeout,
-    )
-    resolver = Resolver(
-        settings, load_overrides(), cache, Verifier(transports), ancestry
+    from .services.container import build_resolver
+
+    resolver = build_resolver(
+        env, settings, transports, cache, ancestry_enabled=ancestry_enabled,
+        overrides=load_overrides(),
     )
 
     resolutions = []
     total = len(packages)
     for index, package in enumerate(sorted(packages, key=lambda p: p.name), 1):
         print(f"[{index}/{total}] {package.name}", flush=True)
-        resolutions.append(resolver.resolve_one(package, release))
+        resolution = resolver.resolve_one(package, release)
+        resolutions.append(resolution)
+        print(f"        {resolution.status.value} / "
+              f"{resolution.verification_level}"
+              + (f" ({', '.join(resolution.review_reasons)})"
+                 if resolution.review_reasons else "")
+              + (f" -> {resolution.upstream.ref}" if resolution.upstream
+                 and resolution.status is Status.VERIFIED else ""),
+              flush=True)
+
+    if packages_wanted:
+        # A partial run updates only the packages it resolved; the rest of the
+        # release's rows are carried through unchanged.
+        resolutions = _merge_release(resolutions, out_dir, release, resolver,
+                                     load_packages())
 
     # The canonical mapping keeps every release the catalogue knows about, so
     # resolving one release must not delete the others' rows from it.
@@ -98,6 +108,8 @@ def run(release: str = "bookworm", out_dir: Path = None, rediscover: bool = True
     write_csv_rows(merged, out_dir / "upstream-mapping.csv")
     write_xlsx_rows(merged, out_dir / "upstream-mapping.xlsx")
     written = write_release_reports(resolutions, out_dir, release)
+    json_path = write_resolutions_json(
+        resolutions, out_dir / "upstream-resolutions.json", release)
 
     counts = Counter(r.status.value for r in resolutions)
     print("\nResolution summary:\n")
@@ -105,10 +117,24 @@ def run(release: str = "bookworm", out_dir: Path = None, rediscover: bool = True
         if counts.get(status):
             print(f"  {status:<14} {counts[status]}")
     print(f"\n  {'TOTAL':<14} {len(resolutions)}")
+    levels = Counter(r.verification_level for r in resolutions)
+    print("\nVerification level:\n")
+    for level, count in sorted(levels.items()):
+        print(f"  {level:<24} {count}")
+    reasons = Counter(code for r in resolutions for code in r.review_reasons)
+    if reasons:
+        print("\nReview reasons:\n")
+        for code, count in sorted(reasons.items()):
+            print(f"  {code:<24} {count}")
+    warned = [r.package for r in resolutions if r.warnings]
+    if warned:
+        print(f"\nPlausibility warnings on {len(warned)} package(s): "
+              f"{', '.join(sorted(warned))}")
 
     print("\nGenerated:\n")
     print(f"  {written['xlsx']}")
     print(f"  {written['csv']}")
+    print(f"  {json_path}   (full fidelity, read by the dashboard)")
     print(f"  {out_dir / 'upstream-mapping.csv'}   (all releases, canonical)")
     print(f"  {out_dir / 'upstream-mapping.xlsx'}  (all releases, canonical)")
 
@@ -122,6 +148,76 @@ def run(release: str = "bookworm", out_dir: Path = None, rediscover: bool = True
             file=sys.stderr,
         )
     return 0
+
+
+def _merge_release(resolutions: list, out_dir: Path, release: str, resolver,
+                   packages) -> list:
+    """Fresh rows for the packages just resolved; every other package of the
+    release re-read from the full-fidelity JSON so the release reports stay
+    complete. A package with no earlier row is simply absent."""
+    import json
+
+    from .services.adapters import to_domain_resolution  # noqa: F401
+
+    path = out_dir / "upstream-resolutions.json"
+    done = {r.package for r in resolutions}
+    if not path.exists():
+        return resolutions
+    previous = [
+        item for item in json.loads(path.read_text()).get("resolutions", [])
+        if item.get("debian_release") == release and item.get("package") not in done
+    ]
+    return resolutions + [_from_domain(item) for item in previous]
+
+
+def _from_domain(item: dict):
+    """A stored domain resolution back into a pipeline record, for reporting."""
+    from .domain.models import UpstreamResolution
+    from .models import (
+        Category, Confidence, DebianSource, Method, Resolution, Status, Upstream,
+    )
+
+    r = UpstreamResolution.model_validate(item)
+    debian = None
+    if r.debian:
+        debian = DebianSource(
+            package=r.debian.source_package, version=r.debian.version,
+            directory=r.debian.directory, suite=r.debian.suite,
+            vcs_git=r.debian.vcs_git, vcs_branch=r.debian.vcs_branch,
+            vcs_browser=r.debian.vcs_browser, homepage=r.debian.homepage,
+        )
+    try:
+        confidence = Confidence(r.confidence)
+    except ValueError:
+        confidence = Confidence.MEDIUM
+    out = Resolution(
+        package=r.package, release=r.debian_release,
+        category=Category(r.category.value) if r.category else Category.ARRCUS_NATIVE,
+        status=Status(r.status.value) if r.status.value in Status.__members__
+        else Status.FAILED,
+        method=Method(r.method.value) if r.method.value in
+        {m.value for m in Method} else Method.UNRESOLVED,
+        confidence=confidence,
+        arcos_repository=r.arcos_repository, github_repository=r.github_repository,
+        arcos_branch=r.arcos_branch, arcos_commit=r.arcos_commit,
+        arcos_path=r.arcos_path, arcos_release=r.arcos_release,
+        mode=r.mode.value.lower(), evidence_source=r.evidence_source,
+        evidence_url=r.evidence_url, verification=r.verification, debian=debian,
+        upstream=Upstream(r.upstream_repository.url, r.upstream_ref,
+                          is_tag=bool(r.upstream_tag))
+        if r.upstream_repository else None,
+        resolved_sha=r.upstream_commit, merge_base=r.merge_base,
+        origin_kind=r.origin_kind, behind=r.behind, arcos_only=r.arcos_only,
+        evidence=[e.detail for e in r.evidence], notes=list(r.notes),
+        verification_level=r.verification_level.value,
+        review_reasons=[x.value for x in r.review_reasons],
+        warnings=list(r.warnings), merge_bases=list(r.merge_bases),
+        counts_basis=r.counts_basis, upstream_commit_date=r.upstream_commit_date,
+        ref_selection=r.ref_selection, curated=r.curated,
+        content_match=r.content_match, debian_patches=r.debian_patches,
+        candidates=[c for c in r.candidates if c.source.value == "ancestry"],
+    )
+    return out
 
 
 def _merge_with_existing(resolutions: list, csv_path: Path, release: str) -> list:

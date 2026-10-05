@@ -24,6 +24,7 @@ OUT_DIR = Path(ROOT) / "out"
 
 # What a generated report is allowed to be called and to contain.
 _PATTERNS = ("upstream-mapping*.csv", "upstream-mapping*.xlsx",
+             "upstream-resolutions.json",
              "upstream-md-plan-*.json", "upstream-md-plan-*.md")
 
 _MEDIA_TYPES = {

@@ -22,6 +22,13 @@ export interface CherryPickPreview {
   warnings: string[]
   message: string | null
   workspace_removed: boolean
+  /** The target branch tip this preview applied onto. Pass it to cherry-pick as expected_base_sha. */
+  base_sha: string | null
+  upstream_sha: string | null
+  /** The target branch is not the commit the comparison was computed against. */
+  base_moved: boolean
+  /** Every selected commit was re-checked against the current target tip and upstream ref. */
+  validated: boolean
 }
 
 export interface CherryPickRequest {
@@ -31,9 +38,16 @@ export interface CherryPickRequest {
   upstream_repository: string
   upstream_ref: string
   shas?: string[]
+  /** The ARCoS commit the comparison was computed against. */
+  comparison_arcos_commit?: string | null
+  comparison_upstream_commit?: string | null
+  /** Commits deliberately selected from outside the current missing set. */
+  approved_shas?: string[]
   branch_name?: string | null
   /** Push the new branch. Never happens without this. */
   push?: boolean
+  /** base_sha from the preview. Required: the cherry-pick is refused if the target branch has moved since. */
+  expected_base_sha?: string | null
 }
 
 export interface CherryPickResult {
@@ -42,6 +56,7 @@ export interface CherryPickResult {
   base_branch: string
   new_branch: string
   applied: string[]
+  base_sha: string | null
   head_sha: string | null
   pushed: boolean
   conflicts: string[]
@@ -62,6 +77,13 @@ export interface CommitInfo {
   classification: CommitClass
   criticality: CriticalityAssessment
   patch: PatchInfo
+  /** Upstream commits only: is the change already in ARCoS? */
+  presence: Presence | null
+  presence_evidence: string[]
+  /** Reachable from the upstream tag for the shipped Debian version, i.e. part of the release itself. */
+  in_base_release: boolean | null
+  reverts: string | null
+  reverted_by: string | null
   web_url: string | null
 }
 
@@ -88,8 +110,34 @@ export interface ComparisonResult {
   missing_upstream: CommitInfo[]
   arcos_only: CommitInfo[]
   already_backported: CommitInfo[]
+  debian_patches: DebianPatchReport | null
+  security: SecurityFinding[]
+  /** External sources consulted, and whether each answered. */
+  security_sources: string[]
   computed_at: string | null
   warnings: string[]
+}
+
+export interface ComparisonSnapshot {
+  arcos_commit: string
+  upstream_repository: string
+  upstream_ref: string
+  upstream_commit: string
+  computed_at: string | null
+  base_tag: string | null
+  series: string | null
+  synthesized_ancestry: boolean
+  relevant_upstream: number
+  definitely_present: number
+  probably_present: number
+  missing: number
+  unknown_presence: number
+  reverted_upstream: number
+  critical_missing: number
+  stable_missing: number
+  arcos_only: number
+  backport_detection: string
+  truncated: boolean
 }
 
 export interface ComparisonSummary {
@@ -103,6 +151,67 @@ export interface ComparisonSummary {
   normal: number
   unknown_criticality: number
   truncated: boolean
+  merge_bases: string[]
+  base_tag: string | null
+  series: string | null
+  upstream_commit_date: string | null
+  counts_basis: string
+  packaging_commits_included: boolean
+  synthesized_ancestry: boolean
+  synthetic_base: string | null
+  relevant_upstream: number
+  definitely_present: number
+  probably_present: number
+  missing: number
+  unknown_presence: number
+  reverted_upstream: number
+  /** Missing commits that are part of the shipped release tag. */
+  missing_in_base_release: number | null
+  backport_detection: string
+}
+
+export interface ContentBaseApprovalRequest {
+  package: string
+  release: string
+  /** Default: the best content match. */
+  tag?: string | null
+  /** The person accountable for the decision. */
+  verified_by: string
+  note?: string | null
+  /** Must be true. */
+  confirm?: boolean
+}
+
+export interface ContentMatch {
+  method: string
+  arcos_tree: string | null
+  arcos_tree_label: string
+  base_tag: string | null
+  base_sha: string | null
+  score: number | null
+  files_compared: number | null
+  files_differing: number | null
+  lines_differing: number | null
+  candidates: ContentMatchCandidate[]
+  approved: boolean
+  verified_by: string | null
+  verified_at: string | null
+  approval_source: string | null
+  notes: string[]
+}
+
+export interface ContentMatchCandidate {
+  tag: string
+  sha: string | null
+  method: string
+  /** The ARCoS commit whose tree was compared. */
+  arcos_tree: string | null
+  files_compared: number
+  files_differing: number
+  lines_added: number | null
+  lines_removed: number | null
+  /** 1.0 is an identical tree. */
+  score: number
 }
 
 export type Criticality = "CRITICAL" | "STABLE_RELEVANT" | "NORMAL" | "UNKNOWN"
@@ -113,6 +222,49 @@ export interface CriticalityAssessment {
   cve_ids: string[]
   fixes: string[]
   cc_stable: boolean
+  /** Which kinds of evidence contributed: commit-message, debian-patch, osv. */
+  sources: string[]
+  external: SecurityEvidence[]
+}
+
+export interface CuratedUpstream {
+  repository: string | null
+  ref: string | null
+  reason: string
+  /** Set when another repository shares history and the curated one does not. */
+  conflict: string | null
+  conflicting_repository: string | null
+  conflicting_ref: string | null
+  replacement_allowed: boolean
+}
+
+export interface DebianPatch {
+  name: string
+  subject: string
+  origin: string | null
+  /** From DEP-3 Origin:, when it names an upstream commit. */
+  upstream_commit: string | null
+  cve_ids: string[]
+  bugs: string[]
+  forwarded: string | null
+  /** security | upstream_backport | debian_specific | unknown */
+  category: string
+  /** Whether the ARCoS tree already carries it; set by a comparison. */
+  presence: Presence | null
+  presence_evidence: string[]
+}
+
+export interface DebianPatchReport {
+  source_package: string
+  version: string
+  release: string
+  available: boolean
+  reason: string | null
+  format: string | null
+  /** Uploads of this upstream version, newest first. */
+  uploads: DebianUpload[]
+  cve_ids: string[]
+  patches: DebianPatch[]
 }
 
 export interface DebianRelease {
@@ -120,6 +272,15 @@ export interface DebianRelease {
   name: string
   suite: string
   version: string
+}
+
+export interface DebianUpload {
+  version: string
+  distribution: string
+  urgency: string
+  date: string | null
+  cve_ids: string[]
+  security: boolean
 }
 
 export interface FileChange {
@@ -189,7 +350,14 @@ export interface PatchRequest {
   upstream_repository: string
   upstream_ref: string
   shas?: string[]
+  /** The ARCoS commit the comparison was computed against. */
+  comparison_arcos_commit?: string | null
+  comparison_upstream_commit?: string | null
+  /** Commits deliberately selected from outside the current missing set. */
+  approved_shas?: string[]
 }
+
+export type Presence = "DEFINITELY_PRESENT" | "PROBABLY_PRESENT" | "MISSING" | "UNKNOWN"
 
 export type PreviewOutcome = "CLEAN" | "CONFLICT" | "EMPTY" | "FAILED"
 
@@ -242,6 +410,26 @@ export interface PullRequestRequest {
   applied?: string[]
 }
 
+export interface RefSelection {
+  ref: string
+  /** branch | tag */
+  kind: string
+  strategy: RefStrategy
+  sha: string | null
+  reason: string
+  /** The Debian version with epoch, revision and repack suffixes removed. */
+  debian_upstream_version: string | null
+  /** major.minor, e.g. 6.1 */
+  series: string | null
+  /** The upstream tag for the shipped Debian version. */
+  base_tag: string | null
+  base_sha: string | null
+  arcos_contains_base: boolean | null
+  is_fallback: boolean
+}
+
+export type RefStrategy = "exact_tag" | "maintenance_branch" | "kernel_series" | "packaging_tag" | "packaging_branch" | "curated" | "manual" | "packaging_fallback" | "default_branch"
+
 export interface ReportFile {
   name: string
   size_bytes: number
@@ -280,6 +468,28 @@ export interface ResolveRequest {
   refresh?: boolean
 }
 
+export type ReviewReason = "NO_CANDIDATE" | "NO_SHARED_HISTORY" | "CURATED_CONFLICT" | "INVALID_REF" | "ANCESTRY_NOT_PROBED" | "CONTENT_MATCH_UNAPPROVED" | "PROBE_FAILED" | "NETWORK_ERROR" | "ARCOS_UNREACHABLE"
+
+export interface SecurityEvidence {
+  /** commit-message | debian-patch | debian-changelog | osv */
+  source: string
+  identifier: string
+  detail: string
+  url: string | null
+  commit: string | null
+}
+
+export interface SecurityFinding {
+  identifier: string
+  aliases: string[]
+  sources: string[]
+  summary: string
+  fix_commits: string[]
+  /** missing | present | not_in_range | unknown - of the fix commits, relative to ARCoS */
+  status: string
+  url: string | null
+}
+
 export interface UpstreamCandidate {
   repository: string
   ref: string | null
@@ -287,6 +497,17 @@ export interface UpstreamCandidate {
   accepted: boolean
   shares_history: boolean | null
   rejected_reason: string | null
+  strategy: RefStrategy | null
+  /** branch | tag */
+  kind: string | null
+  sha: string | null
+  /** git rev-list --count --no-merges ARCOS..CANDIDATE */
+  behind: number | null
+  /** git rev-list --count --no-merges CANDIDATE..ARCOS */
+  arcos_only: number | null
+  /** The candidate commit is an ancestor of the ARCoS commit. */
+  in_arcos: boolean | null
+  error: string | null
 }
 
 export interface UpstreamMdDocument {
@@ -348,8 +569,22 @@ export interface UpstreamResolution {
   /** project | debian_packaging */
   origin_kind: string | null
   merge_base: string | null
+  /** git merge-base --all */
+  merge_bases: string[]
   behind: number | null
   arcos_only: number | null
+  counts_basis: string
+  upstream_commit_date: string | null
+  verification_level: VerificationLevel
+  review_reasons: ReviewReason[]
+  /** Plausibility checks that did not block the answer but deserve a look. */
+  warnings: string[]
+  ref_selection: RefSelection | null
+  curated: CuratedUpstream | null
+  content_match: ContentMatch | null
+  debian_patches: DebianPatchReport | null
+  /** From a comparison run against exactly these commits. */
+  comparison: ComparisonSnapshot | null
   reason: string | null
   /** What was read to reach this answer. */
   evidence_source: string
@@ -362,3 +597,5 @@ export interface UpstreamResolution {
   notes: string[]
   resolved_at: string | null
 }
+
+export type VerificationLevel = "NONE" | "REF_EXISTS" | "SHARED_HISTORY" | "CONTENT_MATCH_APPROVED"
