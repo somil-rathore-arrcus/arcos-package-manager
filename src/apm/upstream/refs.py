@@ -309,10 +309,14 @@ def upstream_candidates(repository: str, listing, upstream_version: str,
         add(configured_ref, configured_strategy, configured_kind,
             "named by the curated mapping" if configured_strategy is
             RefStrategy.CURATED else "named by the resolution chain")
-    add(head or ("HEAD" if not configured_ref else None),
-        RefStrategy.DEFAULT_BRANCH, "branch",
-        "the repository's default branch - a development tip, used only as a "
-        "fallback")
+    if configured_strategy is not RefStrategy.KERNEL_SERIES:
+        # The kernel's series is derived from the Debian version; probing the
+        # mainline tip as well would cost a second kernel history for a ref
+        # that can never be chosen over the series.
+        add(head or ("HEAD" if not configured_ref else None),
+            RefStrategy.DEFAULT_BRANCH, "branch",
+            "the repository's default branch - a development tip, used only "
+            "as a fallback")
     return out
 
 

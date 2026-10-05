@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 PROBE = Path(__file__).with_name("ancestry_probe.sh")
 # Bumped whenever the probe's output changes meaning, so an old cache entry
 # cannot be read as a new one.
-PROBE_VERSION = 2
+PROBE_VERSION = 3
 
 
 class ProbeError(RuntimeError):

@@ -461,3 +461,28 @@ def test_a_manual_upstream_is_verified_only_by_shared_history(tmp_path):
     assert bad.status is ResolutionStatus.NEEDS_REVIEW
     assert ReviewReason.NO_SHARED_HISTORY in bad.review_reasons
     assert bad.behind is None
+
+
+@git_required
+def test_the_probe_keeps_refs_so_later_fetches_negotiate(tmp_path):
+    """Without a ref, git has nothing to advertise as 'have', and every
+    candidate fetch re-downloads the whole history."""
+    up = fx.init(tmp_path / "up")
+    fx.commit(up, "a", "a\n", "a")
+    fx.git(up, "branch", "stable")
+    checker = AncestryChecker(Transports(backend="local"), tmp_path / "c",
+                              workspace_root=str(tmp_path / "ws"))
+    checker.check("demo", "bookworm", "file://" + str(up), "main",
+                  [("file://" + str(up), "stable", None),
+                   ("file://" + str(up), "main", None)])
+    refs = fx.git(tmp_path / "ws" / "ancestry" / "demo__bookworm", "for-each-ref",
+                  "--format=%(refname)", "refs/apm/probe").split()
+    assert refs == ["refs/apm/probe/arcos", "refs/apm/probe/c0", "refs/apm/probe/c1"]
+
+
+def test_the_kernel_series_is_not_padded_with_the_mainline_tip():
+    listing = RefListing(ok=True, branches={"master": "m", "linux-6.1.y": "s"},
+                         tags={"v6.1.150": "t"}, head="master")
+    specs = upstream_candidates("k", listing, "6.1.150", None, ["linux"],
+                                "linux-6.1.y", RefStrategy.KERNEL_SERIES)
+    assert [s.ref for s in specs] == ["v6.1.150", "linux-6.1.y"]

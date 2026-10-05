@@ -39,10 +39,14 @@ fail() {  # fail <kind> <message>
         "$(jstr "$1")" "$(jstr "$2")"
     exit 0
 }
-fetch_ref() {  # fetch_ref <url> <ref> ; FETCH_HEAD on success; 2 = no such ref
+fetch_ref() {  # fetch_ref <url> <ref> <local-name> ; 2 = no such ref
+    # Into a named ref, not only FETCH_HEAD: git advertises "have" commits
+    # from refs, so without one every fetch re-downloads the whole graph - for
+    # the kernel, gigabytes per candidate. With it, later candidates and later
+    # runs fetch only what is new.
     local f
     for f in --filter=tree:0 --filter=blob:none ""; do
-        if git fetch -q --no-tags $f "$1" "$2" 2>"$ERR"; then return 0; fi
+        if git fetch -q --no-tags $f "$1" "+$2:refs/apm/probe/$3" 2>"$ERR"; then return 0; fi
         case $(errkind) in
             INVALID_REF) return 2 ;;
             NETWORK_ERROR) return 1 ;;   # another filter will not help
@@ -59,11 +63,11 @@ git config advice.detachedHead false
 git config gc.auto 0
 git config fetch.writeCommitGraph true
 
-fetch_ref "$AU" "$AR"; rc=$?
+fetch_ref "$AU" "$AR" arcos; rc=$?
 if [ $rc -ne 0 ]; then
     fail "$( [ $rc -eq 2 ] && echo INVALID_REF || errkind )" "could not fetch $AR from $AU: $(errtext)"
 fi
-ARCOS=$(git rev-parse --verify -q FETCH_HEAD^{commit}) || fail GIT_ERROR "FETCH_HEAD is not a commit"
+ARCOS=$(git rev-parse --verify -q "refs/apm/probe/arcos^{commit}") || fail GIT_ERROR "the ARCoS ref is not a commit"
 ARCOS_DATE=$(git log -1 --format=%cI "$ARCOS" 2>"$ERR") || fail GIT_ERROR "git log failed on $ARCOS: $(errtext)"
 
 N=0
@@ -72,13 +76,13 @@ OUT=""
 while [ $# -ge 2 ]; do
     CU=$1; CR=$2; shift 2
     [ -n "$OUT" ] && OUT="$OUT,"
-    fetch_ref "$CU" "$CR"; rc=$?
+    fetch_ref "$CU" "$CR" "c$N"; rc=$?
     if [ $rc -ne 0 ]; then
         kind=$( [ $rc -eq 2 ] && echo INVALID_REF || errkind )
         OUT="$OUT{\"url\":$(jstr "$CU"),\"ref\":$(jstr "$CR"),\"reachable\":$( [ "$kind" = INVALID_REF ] && echo true || echo false ),\"shared\":false,\"error_kind\":$(jstr "$kind"),\"error\":$(jstr "$(errtext)")}"
         SHAS+=(""); URLS+=("$CU"); SHARED+=(0); N=$((N+1)); continue
     fi
-    CAND=$(git rev-parse --verify -q FETCH_HEAD^{commit})
+    CAND=$(git rev-parse --verify -q "refs/apm/probe/c$N^{commit}")
     if [ -z "$CAND" ]; then
         OUT="$OUT{\"url\":$(jstr "$CU"),\"ref\":$(jstr "$CR"),\"reachable\":true,\"shared\":false,\"error_kind\":\"INVALID_REF\",\"error\":\"not a commit\"}"
         SHAS+=(""); URLS+=("$CU"); SHARED+=(0); N=$((N+1)); continue
