@@ -12,7 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from apm.domain.enums import CommitClass, Criticality, ErrorCode, ResolutionStatus
+from apm.domain.enums import (
+    CommitClass, Criticality, ErrorCode, ResolutionStatus, VerificationLevel,
+)
 from apm.domain.models import Repository, UpstreamResolution
 from apm.gitio.transport import Transports
 from apm.gitio.workspaces import WorkspaceManager
@@ -57,6 +59,7 @@ def _resolution(world, upstream_ref="main", arcos_ref=None) -> UpstreamResolutio
     return UpstreamResolution(
         package="demo", debian_release="bookworm",
         status=ResolutionStatus.VERIFIED,
+        verification_level=VerificationLevel.SHARED_HISTORY,
         arcos_repository=str(world["arcos"]),
         arcos_branch="main",
         arcos_commit=arcos_ref,

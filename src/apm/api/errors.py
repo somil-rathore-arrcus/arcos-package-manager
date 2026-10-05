@@ -32,6 +32,11 @@ STATUS = {
     ErrorCode.NO_COMMON_ANCESTOR: 422,
     ErrorCode.UPSTREAM_NOT_RESOLVED: 409,
     ErrorCode.GIT_ERROR: 502,
+    ErrorCode.PROBE_FAILED: 502,
+    ErrorCode.NETWORK_ERROR: 502,
+    ErrorCode.INVALID_REF: 404,
+    ErrorCode.STALE_SELECTION: 409,
+    ErrorCode.BASE_MOVED: 409,
     ErrorCode.INTERNAL: 500,
 }
 

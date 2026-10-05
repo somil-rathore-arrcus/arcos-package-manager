@@ -14,6 +14,7 @@ from ...domain.models import (
 from ...services.github_service import (
     GitHubError, build_patch_pr_body, repo_slug,
 )
+from ...services.patch_service import PatchError
 from ...domain.enums import ErrorCode
 from ..deps import container
 from ..schemas import CherryPickRequest, PatchRequest, PullRequestRequest
@@ -29,6 +30,10 @@ def _selection(request: PatchRequest) -> PatchSelection:
         upstream_repository=request.upstream_repository,
         upstream_ref=request.upstream_ref,
         shas=request.shas,
+        comparison_arcos_commit=request.comparison_arcos_commit,
+        comparison_upstream_commit=request.comparison_upstream_commit,
+        expected_base_sha=getattr(request, "expected_base_sha", None),
+        approved_shas=request.approved_shas,
     )
 
 
@@ -44,7 +49,18 @@ def preview(request: PatchRequest, app=Depends(container)):
 
 @router.post("/patches/cherry-pick", response_model=CherryPickResult)
 def cherry_pick(request: CherryPickRequest, app=Depends(container)):
-    """Apply the selection to a NEW branch. The target branch is never written to."""
+    """Apply the selection to a NEW branch. The target branch is never written to.
+
+    Only after a preview: the request carries the preview's base_sha, and the
+    service refuses if the target branch has moved since, or if any selected
+    commit is no longer in the missing set.
+    """
+    if not request.expected_base_sha:
+        raise PatchError(
+            ErrorCode.INVALID_REQUEST,
+            "Run a preview first and pass its base_sha as expected_base_sha; a "
+            "selection is never applied against a branch nobody previewed.",
+        )
     package = app.catalog.package(request.package)
     repository = package.arcos_repository if package else ""
     return app.patches.cherry_pick(

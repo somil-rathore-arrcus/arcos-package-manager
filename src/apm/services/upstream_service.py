@@ -16,10 +16,12 @@ import time
 from typing import Dict, Optional, Tuple
 
 from ..domain.enums import (
-    ErrorCode, ResolutionMethod, ResolutionMode, ResolutionStatus,
+    ErrorCode, RefStrategy, ResolutionMethod, ResolutionMode, ResolutionStatus,
+    ReviewReason, VerificationLevel,
 )
 from ..domain.models import (
-    Repository, ResolutionEvidence, UpstreamCandidate, UpstreamResolution,
+    RefSelection, Repository, ResolutionEvidence, UpstreamCandidate,
+    UpstreamResolution,
 )
 from ..upstream.forge import is_packaging_host
 from .adapters import to_domain_resolution
@@ -180,11 +182,26 @@ class UpstreamService:
             "debian_packaging"
             if resolution.upstream_repository.is_packaging else "project"
         )
-        resolution.status = ResolutionStatus.VERIFIED
+        # ls-remote proves the repository and ref exist - REF_EXISTS - and no
+        # more. VERIFIED waits for the ancestry check below.
+        resolution.status = ResolutionStatus.NEEDS_REVIEW
+        resolution.verification_level = VerificationLevel.REF_EXISTS
+        resolution.review_reasons = []
+        resolution.warnings = []
+        resolution.curated = None
+        resolution.content_match = None
+        resolution.comparison = None
+        resolution.ref_selection = RefSelection(
+            ref=ref, kind="tag" if check.ref_kind == "tag" else "branch",
+            strategy=RefStrategy.MANUAL, sha=check.sha,
+            reason="supplied by a user and verified with ls-remote",
+        )
         resolution.confidence = "manual"
         resolution.merge_base = None
+        resolution.merge_bases = []
         resolution.behind = None
         resolution.arcos_only = None
+        resolution.counts_basis = ""
         resolution.evidence = [
             ResolutionEvidence(
                 kind="manual",
@@ -207,13 +224,18 @@ class UpstreamService:
         return resolution
 
     def _check_manual_ancestry(self, resolution: UpstreamResolution) -> None:
-        """Say so when a manual upstream shares no history with the fork.
+        """Prove - or fail to prove - that a manual upstream relates to the fork.
 
-        Not an error - a user may know something the tool does not - but a
-        comparison against it would have no common ancestor, and that is worth
-        knowing before running one.
+        Shared history makes it VERIFIED. No shared history is a finding, and
+        the resolution says so (NEEDS_REVIEW, NO_SHARED_HISTORY). A git failure
+        is neither: the resolution is FAILED, because nothing was measured.
         """
         if self.workspaces is None or not resolution.arcos_commit:
+            resolution.review_reasons.append(ReviewReason.ANCESTRY_NOT_PROBED)
+            resolution.notes.append(
+                "Ancestry was not checked (no workspace or no ARCoS commit), so "
+                "this manual upstream is unproven."
+            )
             return
         workspace = self.workspaces.scratch(
             f"manual-{resolution.package}-{resolution.debian_release}"
@@ -228,27 +250,43 @@ class UpstreamService:
                 "upstream", resolution.upstream_repository.url,
                 resolution.upstream_ref,
             )
-            merge_base = workspace.merge_base(arcos_head, upstream_head)
-            if merge_base:
-                resolution.merge_base = merge_base
+            merge_bases = workspace.merge_bases(arcos_head, upstream_head)
+            if merge_bases:
+                resolution.merge_base = merge_bases[0]
+                resolution.merge_bases = merge_bases
                 resolution.behind = workspace.count(
-                    f"{merge_base}..{upstream_head}", no_merges=True
+                    f"{upstream_head} ^{arcos_head}", no_merges=True
                 )
                 resolution.arcos_only = workspace.count(
-                    f"{merge_base}..{arcos_head}", no_merges=True
+                    f"{arcos_head} ^{upstream_head}", no_merges=True
+                )
+                resolution.counts_basis = (
+                    "raw commit-graph counts, head-based: git rev-list --count "
+                    "--no-merges ARCOS..UPSTREAM and UPSTREAM..ARCOS. "
+                    "Already-backported commits are NOT excluded"
+                )
+                resolution.upstream_commit_date = workspace.commit_date(upstream_head)
+                resolution.verification_level = VerificationLevel.SHARED_HISTORY
+                resolution.status = ResolutionStatus.VERIFIED
+                resolution.verification = (
+                    f"git merge-base: shares history with the fork (merge base "
+                    f"{', '.join(m[:12] for m in merge_bases)})"
                 )
                 resolution.evidence.append(
                     ResolutionEvidence(
                         kind="ancestry",
                         detail=(
-                            f"shares history with the fork: merge base "
-                            f"{merge_base[:12]}, {resolution.behind} behind, "
-                            f"{resolution.arcos_only} ARCoS-only"
+                            f"shares history with the fork: merge base(s) "
+                            f"{', '.join(m[:12] for m in merge_bases)}; "
+                            f"{resolution.behind} upstream commit(s) not in "
+                            f"ARCoS, {resolution.arcos_only} ARCoS commit(s) not "
+                            f"upstream (raw counts)"
                         ),
                     )
                 )
             else:
                 resolution.status = ResolutionStatus.NEEDS_REVIEW
+                resolution.review_reasons.append(ReviewReason.NO_SHARED_HISTORY)
                 resolution.notes.append(
                     "This repository shares no history with the ARCoS fork. It "
                     "exists and the ref is real, but a commit comparison "
@@ -260,10 +298,13 @@ class UpstreamService:
                         detail="no common ancestor with the ARCoS fork",
                     )
                 )
-        except Exception as exc:  # noqa: BLE001 - advisory only
-            log.info("manual ancestry check skipped: %s", exc)
+        except Exception as exc:  # noqa: BLE001 - reported as FAILED, not hidden
+            log.info("manual ancestry check failed: %s", exc)
+            resolution.status = ResolutionStatus.FAILED
+            resolution.review_reasons.append(ReviewReason.PROBE_FAILED)
             resolution.notes.append(
-                f"Ancestry could not be checked for this manual upstream: {exc}"
+                f"Ancestry could not be checked for this manual upstream: {exc}. "
+                f"Nothing was measured; this is not a finding."
             )
         finally:
             workspace.destroy()

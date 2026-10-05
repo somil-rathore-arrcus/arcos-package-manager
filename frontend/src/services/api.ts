@@ -6,7 +6,8 @@
 
 import type {
   Branch, CherryPickPreview, CherryPickRequest, CherryPickResult,
-  ComparisonRequest, ComparisonResult, DebianRelease, HealthResponse,
+  ComparisonRequest, ComparisonResult, ContentBaseApprovalRequest,
+  DebianRelease, HealthResponse,
   ManualUpstreamRequest, Package, PublishResult, PullRequest, PullRequestRequest,
   ReportFile, ResolutionEvidence, UpstreamMdDocument, UpstreamMdPrRequest,
   UpstreamMdRequest, UpstreamResolution,
@@ -151,4 +152,7 @@ export const api = {
     post<PublishResult>('/upstream-md/pr', body, SLOW_TIMEOUT_MS),
 
   reports: () => request<ReportFile[]>('/reports'),
+
+  approveContentBase: (body: ContentBaseApprovalRequest) =>
+    post<Record<string, unknown>>('/upstream/content-base/approve', body),
 }

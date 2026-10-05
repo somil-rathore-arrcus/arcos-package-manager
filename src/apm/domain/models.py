@@ -16,12 +16,16 @@ from .enums import (
     CommitClass,
     Criticality,
     PackageCategory,
+    Presence,
     PreviewOutcome,
     PublishStatus,
+    RefStrategy,
     ResolutionMethod,
     ResolutionMode,
     ResolutionStatus,
+    ReviewReason,
     UpstreamMdOutcome,
+    VerificationLevel,
 )
 
 
@@ -117,7 +121,11 @@ class ResolutionEvidence(BaseModel):
 
 
 class UpstreamCandidate(BaseModel):
-    """A repository considered, and what became of it."""
+    """A repository and ref considered, and what became of it.
+
+    Every ref the ancestry probe measured is kept, not just the winner, so a
+    reviewer can see that `main` was 910 commits away and the release tag 0.
+    """
 
     repository: str
     ref: Optional[str] = None
@@ -125,6 +133,206 @@ class UpstreamCandidate(BaseModel):
     accepted: bool = False
     shares_history: Optional[bool] = None
     rejected_reason: Optional[str] = None
+    strategy: Optional[RefStrategy] = None
+    kind: Optional[str] = Field(None, description="branch | tag")
+    sha: Optional[str] = None
+    behind: Optional[int] = Field(
+        None, description="git rev-list --count --no-merges ARCOS..CANDIDATE"
+    )
+    arcos_only: Optional[int] = Field(
+        None, description="git rev-list --count --no-merges CANDIDATE..ARCOS"
+    )
+    in_arcos: Optional[bool] = Field(
+        None, description="The candidate commit is an ancestor of the ARCoS commit."
+    )
+    error: Optional[str] = None
+
+
+class RefSelection(BaseModel):
+    """Why the upstream ref is the one it is. Recorded as evidence, always."""
+
+    ref: str
+    kind: str = Field(description="branch | tag")
+    strategy: RefStrategy
+    sha: Optional[str] = None
+    reason: str = ""
+    debian_upstream_version: Optional[str] = Field(
+        None, description="The Debian version with epoch, revision and repack "
+                          "suffixes removed."
+    )
+    series: Optional[str] = Field(None, description="major.minor, e.g. 6.1")
+    base_tag: Optional[str] = Field(
+        None, description="The upstream tag for the shipped Debian version."
+    )
+    base_sha: Optional[str] = None
+    arcos_contains_base: Optional[bool] = None
+    is_fallback: bool = False
+
+
+class CuratedUpstream(BaseModel):
+    """What a person wrote in config/overrides.yaml, kept visible whatever the
+    history turned out to say."""
+
+    repository: Optional[str] = None
+    ref: Optional[str] = None
+    reason: str = ""
+    conflict: Optional[str] = Field(
+        None, description="Set when another repository shares history and the "
+                          "curated one does not."
+    )
+    conflicting_repository: Optional[str] = None
+    conflicting_ref: Optional[str] = None
+    replacement_allowed: bool = False
+
+
+class ContentMatchCandidate(BaseModel):
+    tag: str
+    sha: Optional[str] = None
+    method: str = "tree-compare"
+    arcos_tree: Optional[str] = Field(
+        None, description="The ARCoS commit whose tree was compared."
+    )
+    files_compared: int = 0
+    files_differing: int = 0
+    lines_added: Optional[int] = None
+    lines_removed: Optional[int] = None
+    score: float = Field(0.0, description="1.0 is an identical tree.")
+
+
+class ContentMatch(BaseModel):
+    """The closest upstream release to an ARCoS tree that shares no history.
+
+    A finding, not a verification: it takes a person's approval before any
+    comparison is built on it, and anything computed from it says it was
+    synthesized.
+    """
+
+    method: str = "tree-compare"
+    arcos_tree: Optional[str] = None
+    arcos_tree_label: str = ""
+    base_tag: Optional[str] = None
+    base_sha: Optional[str] = None
+    score: Optional[float] = None
+    files_compared: Optional[int] = None
+    files_differing: Optional[int] = None
+    lines_differing: Optional[int] = None
+    candidates: List[ContentMatchCandidate] = Field(default_factory=list)
+    approved: bool = False
+    verified_by: Optional[str] = None
+    verified_at: Optional[str] = None
+    approval_source: Optional[str] = None
+    notes: List[str] = Field(default_factory=list)
+
+
+class DebianPatch(BaseModel):
+    """One quilt patch Debian applies to the shipped version."""
+
+    name: str
+    subject: str = ""
+    origin: Optional[str] = None
+    upstream_commit: Optional[str] = Field(
+        None, description="From DEP-3 Origin:, when it names an upstream commit."
+    )
+    cve_ids: List[str] = Field(default_factory=list)
+    bugs: List[str] = Field(default_factory=list)
+    forwarded: Optional[str] = None
+    category: str = Field(
+        "unknown", description="security | upstream_backport | debian_specific | unknown"
+    )
+    presence: Optional[Presence] = Field(
+        None, description="Whether the ARCoS tree already carries it; set by a comparison."
+    )
+    presence_evidence: List[str] = Field(default_factory=list)
+
+
+class DebianUpload(BaseModel):
+    version: str
+    distribution: str = ""
+    urgency: str = ""
+    date: Optional[str] = None
+    cve_ids: List[str] = Field(default_factory=list)
+    security: bool = False
+
+
+class DebianPatchReport(BaseModel):
+    """What Debian changed on top of the upstream release it ships.
+
+    Supporting evidence only: a Debian patch is packaging, never an upstream
+    source commit, and is never counted as one.
+    """
+
+    source_package: str
+    version: str
+    release: str
+    available: bool = True
+    reason: Optional[str] = None
+    format: Optional[str] = None
+    uploads: List[DebianUpload] = Field(
+        default_factory=list,
+        description="Uploads of this upstream version, newest first.",
+    )
+    cve_ids: List[str] = Field(default_factory=list)
+    patches: List[DebianPatch] = Field(default_factory=list)
+
+    @property
+    def security_patches(self) -> List[DebianPatch]:
+        return [p for p in self.patches if p.category == "security"]
+
+
+class SecurityEvidence(BaseModel):
+    """One statement, from one source, that a change is security-relevant."""
+
+    source: str = Field(
+        description="commit-message | debian-patch | debian-changelog | osv"
+    )
+    identifier: str
+    detail: str = ""
+    url: Optional[str] = None
+    commit: Optional[str] = None
+
+
+class SecurityFinding(BaseModel):
+    """A vulnerability known to external sources, and where ARCoS stands on it."""
+
+    identifier: str
+    aliases: List[str] = Field(default_factory=list)
+    sources: List[str] = Field(default_factory=list)
+    summary: str = ""
+    fix_commits: List[str] = Field(default_factory=list)
+    status: str = Field(
+        "unknown",
+        description="missing | present | not_in_range | unknown - of the fix "
+                    "commits, relative to ARCoS",
+    )
+    url: Optional[str] = None
+
+
+class ComparisonSnapshot(BaseModel):
+    """The headline numbers of one comparison, pinned to the commits it used.
+
+    Attached to a resolution only while both commits still match, so a number
+    computed against yesterday's upstream never reaches today's report.
+    """
+
+    arcos_commit: str
+    upstream_repository: str
+    upstream_ref: str
+    upstream_commit: str
+    computed_at: Optional[datetime] = None
+    base_tag: Optional[str] = None
+    series: Optional[str] = None
+    synthesized_ancestry: bool = False
+    relevant_upstream: int = 0
+    definitely_present: int = 0
+    probably_present: int = 0
+    missing: int = 0
+    unknown_presence: int = 0
+    reverted_upstream: int = 0
+    critical_missing: int = 0
+    stable_missing: int = 0
+    arcos_only: int = 0
+    backport_detection: str = ""
+    truncated: bool = False
 
 
 class UpstreamResolution(BaseModel):
@@ -162,8 +370,31 @@ class UpstreamResolution(BaseModel):
     )
 
     merge_base: Optional[str] = None
+    merge_bases: List[str] = Field(
+        default_factory=list, description="git merge-base --all"
+    )
+    # Raw commit-graph counts, head-based: ARCOS..UPSTREAM and UPSTREAM..ARCOS.
+    # Not a backlog - backports are not excluded - and labelled as such
+    # wherever they are shown.
     behind: Optional[int] = None
     arcos_only: Optional[int] = None
+    counts_basis: str = ""
+    upstream_commit_date: Optional[str] = None
+
+    verification_level: VerificationLevel = VerificationLevel.NONE
+    review_reasons: List[ReviewReason] = Field(default_factory=list)
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Plausibility checks that did not block the answer but "
+                    "deserve a look.",
+    )
+    ref_selection: Optional[RefSelection] = None
+    curated: Optional[CuratedUpstream] = None
+    content_match: Optional[ContentMatch] = None
+    debian_patches: Optional[DebianPatchReport] = None
+    comparison: Optional[ComparisonSnapshot] = Field(
+        None, description="From a comparison run against exactly these commits."
+    )
 
     reason: Optional[str] = None
     evidence_source: str = Field(
@@ -183,9 +414,14 @@ class UpstreamResolution(BaseModel):
         """Whether a git comparison against this resolution is meaningful."""
         return bool(
             self.status.is_actionable
+            and self.verification_level.proves_relationship
             and self.upstream_repository
             and self.upstream_ref
         )
+
+    @property
+    def synthesized_ancestry(self) -> bool:
+        return self.verification_level is VerificationLevel.CONTENT_MATCH_APPROVED
 
 
 class ReportFile(BaseModel):
@@ -206,6 +442,12 @@ class CriticalityAssessment(BaseModel):
     cve_ids: List[str] = Field(default_factory=list)
     fixes: List[str] = Field(default_factory=list)
     cc_stable: bool = False
+    sources: List[str] = Field(
+        default_factory=list,
+        description="Which kinds of evidence contributed: commit-message, "
+                    "debian-patch, osv.",
+    )
+    external: List[SecurityEvidence] = Field(default_factory=list)
 
 
 class PatchInfo(BaseModel):
@@ -231,6 +473,16 @@ class CommitInfo(BaseModel):
         default_factory=CriticalityAssessment
     )
     patch: PatchInfo = Field(default_factory=PatchInfo)
+    presence: Optional[Presence] = Field(
+        None, description="Upstream commits only: is the change already in ARCoS?"
+    )
+    presence_evidence: List[str] = Field(default_factory=list)
+    in_base_release: Optional[bool] = Field(
+        None, description="Reachable from the upstream tag for the shipped "
+                          "Debian version, i.e. part of the release itself."
+    )
+    reverts: Optional[str] = None
+    reverted_by: Optional[str] = None
     web_url: Optional[str] = None
 
 
@@ -249,6 +501,30 @@ class ComparisonSummary(BaseModel):
     unknown_criticality: int = 0
     truncated: bool = False
 
+    # What the numbers are measured against, so none of them is a bare count.
+    merge_bases: List[str] = Field(default_factory=list)
+    base_tag: Optional[str] = None
+    series: Optional[str] = None
+    upstream_commit_date: Optional[str] = None
+    counts_basis: str = ""
+    packaging_commits_included: bool = False
+    synthesized_ancestry: bool = False
+    synthetic_base: Optional[str] = None
+
+    # The backlog, by presence. relevant_upstream is every upstream commit in
+    # the selected release/series that the ARCoS commit cannot reach; the rest
+    # partition it.
+    relevant_upstream: int = 0
+    definitely_present: int = 0
+    probably_present: int = 0
+    missing: int = 0
+    unknown_presence: int = 0
+    reverted_upstream: int = 0
+    missing_in_base_release: Optional[int] = Field(
+        None, description="Missing commits that are part of the shipped release tag."
+    )
+    backport_detection: str = ""
+
 
 class ComparisonResult(BaseModel):
     package: str
@@ -265,8 +541,39 @@ class ComparisonResult(BaseModel):
     arcos_only: List[CommitInfo] = Field(default_factory=list)
     already_backported: List[CommitInfo] = Field(default_factory=list)
 
+    debian_patches: Optional[DebianPatchReport] = None
+    security: List[SecurityFinding] = Field(default_factory=list)
+    security_sources: List[str] = Field(
+        default_factory=list,
+        description="External sources consulted, and whether each answered.",
+    )
+
     computed_at: Optional[datetime] = None
     warnings: List[str] = Field(default_factory=list)
+
+    def snapshot(self) -> "ComparisonSnapshot":
+        summary = self.summary
+        return ComparisonSnapshot(
+            arcos_commit=self.arcos_commit or "",
+            upstream_repository=self.upstream_repository,
+            upstream_ref=self.upstream_ref,
+            upstream_commit=self.upstream_commit or "",
+            computed_at=self.computed_at,
+            base_tag=summary.base_tag,
+            series=summary.series,
+            synthesized_ancestry=summary.synthesized_ancestry,
+            relevant_upstream=summary.relevant_upstream,
+            definitely_present=summary.definitely_present,
+            probably_present=summary.probably_present,
+            missing=summary.missing,
+            unknown_presence=summary.unknown_presence,
+            reverted_upstream=summary.reverted_upstream,
+            critical_missing=summary.critical,
+            stable_missing=summary.stable_relevant,
+            arcos_only=summary.arcos_only,
+            backport_detection=summary.backport_detection,
+            truncated=summary.truncated,
+        )
 
 
 class PatchSelection(BaseModel):
@@ -282,6 +589,19 @@ class PatchSelection(BaseModel):
     upstream_repository: str
     upstream_ref: str
     shas: List[str] = Field(default_factory=list)
+    comparison_arcos_commit: Optional[str] = Field(
+        None, description="The ARCoS commit the comparison was computed against."
+    )
+    comparison_upstream_commit: Optional[str] = None
+    expected_base_sha: Optional[str] = Field(
+        None, description="The target branch tip the preview ran on. A "
+                          "cherry-pick is refused if the branch has moved since."
+    )
+    approved_shas: List[str] = Field(
+        default_factory=list,
+        description="Commits deliberately selected from outside the current "
+                    "missing set. Still must be on the upstream ref.",
+    )
 
 
 class FileChange(BaseModel):
@@ -305,6 +625,19 @@ class CherryPickPreview(BaseModel):
     warnings: List[str] = Field(default_factory=list)
     message: Optional[str] = None
     workspace_removed: bool = True
+    base_sha: Optional[str] = Field(
+        None, description="The target branch tip this preview applied onto. "
+                          "Pass it to cherry-pick as expected_base_sha."
+    )
+    upstream_sha: Optional[str] = None
+    base_moved: bool = Field(
+        False, description="The target branch is not the commit the "
+                           "comparison was computed against."
+    )
+    validated: bool = Field(
+        False, description="Every selected commit was re-checked against the "
+                           "current target tip and upstream ref."
+    )
 
 
 class CherryPickResult(BaseModel):
@@ -313,6 +646,7 @@ class CherryPickResult(BaseModel):
     base_branch: str
     new_branch: str
     applied: List[str] = Field(default_factory=list)
+    base_sha: Optional[str] = None
     head_sha: Optional[str] = None
     pushed: bool = False
     conflicts: List[str] = Field(default_factory=list)

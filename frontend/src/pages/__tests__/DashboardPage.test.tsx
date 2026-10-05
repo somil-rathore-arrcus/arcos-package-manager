@@ -159,6 +159,21 @@ describe('upstream resolution', () => {
     expect(screen.getByText(/finished answer, not a failure/i)).toBeInTheDocument()
   })
 
+  it('shows the verification level apart from status, and labels raw counts', async () => {
+    await openDashboard()
+    await resolve()
+    expect(screen.getByText('SHARED_HISTORY')).toBeInTheDocument()
+    expect(screen.getByText(/109 upstream commit\(s\) not in ARCoS/)).toBeInTheDocument()
+    expect(screen.getByText(/not a list of missing fixes/i)).toBeInTheDocument()
+    expect(screen.getByText('fallback')).toBeInTheDocument()
+  })
+
+  it('does not offer comparison for an upstream that only exists', async () => {
+    await openDashboard({ upstream: { ...fx.resolution, verification_level: 'REF_EXISTS' } })
+    await resolve()
+    expect(screen.getByRole('button', { name: /^compare$/i })).toBeDisabled()
+  })
+
   it('shows a NEEDS_REVIEW package without inventing an upstream', async () => {
     await openDashboard({ upstream: fx.needsReview })
     await resolve()
@@ -172,6 +187,14 @@ describe('upstream resolution', () => {
 })
 
 describe('comparison', () => {
+  it('states the backlog by presence, not as a raw count', async () => {
+    await openDashboard()
+    await compare()
+    expect(screen.getByText('Relevant upstream commits')).toBeInTheDocument()
+    expect(screen.getByText('Critical/security missing')).toBeInTheDocument()
+    expect(screen.queryByText(/since ancestor/i)).toBeNull()
+  })
+
   it('separates missing, ARCoS-specific and backported commits', async () => {
     await openDashboard()
     await compare()
@@ -197,7 +220,7 @@ describe('comparison', () => {
 
     const plain = screen.getByText('refactor parser').closest('tr')!
     expect(within(plain).getByText('Unknown')).toBeInTheDocument()
-    expect(within(plain).getByText(/no evidence recorded/i)).toBeInTheDocument()
+    expect(within(plain).getByText(/unknown, not safe/i)).toBeInTheDocument()
   })
 
   it('filters to critical commits only', async () => {
@@ -260,6 +283,20 @@ describe('patch workflow', () => {
     await user.click(screen.getByRole('button', { name: /create pull request/i }))
     expect(await screen.findByText('https://github.com/Arrcus/pyrad/pull/42'))
       .toBeInTheDocument()
+  })
+
+  it('applies only onto the tip the preview ran on, and says what it compared', async () => {
+    const recorded = await selectAndPreview()
+    const previewCall = recorded.calls.find((c) => c.path === '/patches/preview')!
+    expect(previewCall.body).toMatchObject({
+      comparison_arcos_commit: fx.comparison.arcos_commit,
+      comparison_upstream_commit: fx.comparison.upstream_commit,
+    })
+
+    await user.click(screen.getByRole('button', { name: /create patch branch/i }))
+    await screen.findByText(/patch branch created/i)
+    const pick = recorded.calls.find((c) => c.path === '/patches/cherry-pick')!
+    expect(pick.body).toMatchObject({ expected_base_sha: fx.cleanPreview.base_sha })
   })
 
   it('offers no way to push or open a PR in read-only mode', async () => {

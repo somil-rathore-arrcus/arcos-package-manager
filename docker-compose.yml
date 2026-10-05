@@ -6,27 +6,42 @@ services:
   backend:
     build:
       context: .
+      target: runtime
       args:
         APP_UID: ${APM_UID:-10001}
     env_file: [.env]
     environment:
       APM_CACHE_DIR: /var/cache/arcos-package-manager
       APM_WORKSPACE_DIR: /var/tmp/arcos-package-manager
-      # config/ stays read-only; the catalogue `discover` regenerates is
-      # runtime state and lives on the writable out/ mount. Until the first
-      # discover, the committed config/packages.yaml is read instead.
+      # config/ stays read-only; everything generated at runtime lives on the
+      # writable out/ mount. Until the first discover, the committed
+      # config/packages.yaml is read instead.
       APM_PACKAGES_FILE: /app/out/packages.yaml
+      APM_APPROVALS_FILE: /app/out/approvals.yaml
+      # .env names files on the HOST; inside the container they are wherever
+      # the volumes below mount them. Empty when the host file is not set.
+      APM_SSH_IDENTITY_FILE: ${APM_SSH_IDENTITY_FILE:+/home/apm/.ssh/id_bridge}
+      APM_SSH_KNOWN_HOSTS: ${APM_SSH_KNOWN_HOSTS_FILE:+/home/apm/.ssh/known_hosts}
+      APM_GIT_SSH_IDENTITY_FILE: ${APM_GIT_SSH_KEY_FILE:+/home/apm/.ssh/id_git}
+      APM_GIT_KNOWN_HOSTS_FILE: ${APM_SSH_KNOWN_HOSTS_FILE:+/home/apm/.ssh/known_hosts}
     volumes:
       - ./config:/app/config:ro
-      # The mapping, the generated debian/upstream.md files, the plan and the
-      # PR results ledger. On the host so a rebuild never loses the record of
-      # which branches and pull requests exist. Must be writable by APM_UID.
+      # The mapping, the generated debian/upstream.md files, the plan, the PR
+      # results ledger, comparison snapshots, approvals and the runtime package
+      # catalogue. On the host so a rebuild never loses the record of which
+      # branches and pull requests exist. Must be writable by APM_UID.
       - ./out:/app/out
       - apm-cache:/var/cache/arcos-package-manager
-      - apm-workspace:/var/tmp/arcos-package-manager
-      # Read-only SSH material for the bridge. Defaults to /dev/null so the
-      # stack still starts when no bridge is configured.
+      # A named volume by default. On the host that already holds clones
+      # (APM_WORKSPACE_HOST_DIR=/var/tmp/arcos-package-manager) they are reused.
+      - ${APM_WORKSPACE_HOST_DIR:-apm-workspace}:/var/tmp/arcos-package-manager
+      # Read-only SSH material. Defaults to /dev/null so the stack still starts
+      # when none is configured.
+      #   id_bridge  for APM_GIT_BACKEND=auto|ssh: reaching the bridge host
+      #   id_git     for APM_GIT_BACKEND=local: git's own key for the
+      #              repositories, on a host that already has the access
       - ${APM_SSH_IDENTITY_FILE:-/dev/null}:/home/apm/.ssh/id_bridge:ro
+      - ${APM_GIT_SSH_KEY_FILE:-/dev/null}:/home/apm/.ssh/id_git:ro
       - ${APM_SSH_KNOWN_HOSTS_FILE:-/dev/null}:/home/apm/.ssh/known_hosts:ro
     restart: unless-stopped
 

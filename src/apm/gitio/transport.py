@@ -20,6 +20,7 @@ the bridge is itself configuration.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shlex
 import subprocess
@@ -74,12 +75,40 @@ class SshConfig:
 
 
 class LocalGit:
-    """Run git on this machine."""
+    """Run git on this machine.
+
+    `ssh_identity`, when set, is the key git uses for ssh:// remotes - how a
+    container that runs git itself reaches the private repositories with a
+    mounted, read-only key, and no password or second hop.
+    """
 
     name = "local"
 
-    def __init__(self, timeout: int = 60) -> None:
+    def __init__(self, timeout: int = 60, ssh_identity: str = "",
+                 known_hosts: str = "",
+                 strict_host_key_checking: str = "accept-new") -> None:
         self.timeout = timeout
+        self.ssh_identity = ssh_identity
+        self.known_hosts = known_hosts
+        self.strict_host_key_checking = strict_host_key_checking
+
+    def git_ssh_command(self) -> Optional[str]:
+        if not self.ssh_identity:
+            return None
+        parts = ["ssh", "-i", self.ssh_identity, "-o", "IdentitiesOnly=yes",
+                 "-o", "BatchMode=yes",
+                 "-o", f"StrictHostKeyChecking={self.strict_host_key_checking}"]
+        if self.known_hosts:
+            parts += ["-o", f"UserKnownHostsFile={self.known_hosts}"]
+        return " ".join(shlex.quote(p) for p in parts)
+
+    def _env(self) -> Optional[dict]:
+        command = self.git_ssh_command()
+        if not command:
+            return None
+        env = dict(os.environ)
+        env["GIT_SSH_COMMAND"] = command
+        return env
 
     def run(self, args: List[str], timeout: Optional[int] = None) -> GitResult:
         return self.shell(
@@ -91,8 +120,11 @@ class LocalGit:
             proc = subprocess.run(
                 ["bash", "-c", command],
                 capture_output=True,
-                text=True,
+                # Source trees are not all UTF-8; one Latin-1 file in a diff
+                # must not turn a whole comparison into an exception.
+                encoding="utf-8", errors="replace",
                 timeout=timeout or self.timeout,
+                env=self._env(),
             )
         except subprocess.TimeoutExpired:
             return GitResult(False, "", f"timed out after {timeout or self.timeout}s")
@@ -148,7 +180,7 @@ class SshGit:
             proc = subprocess.run(
                 self._command(command, limit),
                 capture_output=True,
-                text=True,
+                encoding="utf-8", errors="replace",
                 timeout=limit,
             )
         except subprocess.TimeoutExpired:
@@ -167,6 +199,8 @@ class Transports:
         backend: str = "auto",
         private_patterns: Optional[List[str]] = None,
         timeout: int = 60,
+        git_ssh_identity: str = "",
+        git_known_hosts: str = "",
     ) -> None:
         self.backend = backend
         self.timeout = timeout
@@ -174,7 +208,11 @@ class Transports:
         self._patterns = [
             re.compile(p, re.IGNORECASE) for p in (private_patterns or [])
         ]
-        self.local = LocalGit(timeout=timeout)
+        self.local = LocalGit(
+            timeout=timeout, ssh_identity=git_ssh_identity,
+            known_hosts=git_known_hosts,
+            strict_host_key_checking=self.ssh_config.strict_host_key_checking,
+        )
         self._ssh: Optional[SshGit] = None
 
     def matches_private(self, url: str) -> bool:
@@ -208,5 +246,6 @@ class Transports:
             "ssh_configured": self.ssh_config.configured,
             "ssh_host": self.ssh_config.host or None,
             "ssh_proxy_jump": self.ssh_config.proxy_jump or None,
+            "local_git_ssh_key": bool(self.local.ssh_identity),
             "private_patterns": [p.pattern for p in self._patterns],
         }

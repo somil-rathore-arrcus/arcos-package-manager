@@ -20,6 +20,23 @@ from .models import Resolution, Status
 
 log = logging.getLogger(__name__)
 
+# Raw commit-graph counts. Named for what they are - head-based rev-list
+# counts with backports NOT excluded - so nobody reads 910 as "910 missing
+# fixes". The meaningful backlog comes from a comparison (see upstream.md).
+BEHIND = "Upstream Commits Not In ARCoS (raw)"
+AHEAD = "ARCoS Commits Not In Upstream (raw)"
+# Older mappings used these names; readers accept both.
+LEGACY_BEHIND, LEGACY_AHEAD = "Commits Behind", "ARCoS-only Commits"
+
+EVIDENCE_COLUMNS = [
+    "Verification Level", "Review Reasons", "Warnings",
+    "Ref Strategy", "Ref Selection", "Debian Upstream Version",
+    "Target Series", "Upstream Base Tag", "ARCoS Contains Base Tag",
+    "Upstream Commit Date", "Merge Bases", "Counts Basis",
+    "Curated Upstream", "Curated Conflict", "Content Match",
+    "Debian Patches", "Debian CVEs",
+]
+
 COLUMNS = [
     "Package", "Category", "Debian Release", "Status", "Confidence",
     "Resolution Mode", "Resolution Method",
@@ -28,9 +45,10 @@ COLUMNS = [
     "Debian Source Package", "Debian Version",
     "Upstream Repository", "Upstream Ref", "Upstream Branch", "Upstream Tag",
     "Origin Kind", "Upstream Commit",
-    "Commits Behind", "ARCoS-only Commits", "Merge Base",
+    BEHIND, AHEAD, "Merge Base",
     "Vcs-Git (packaging)", "Vcs-Git Branch", "Homepage",
     "Evidence Source", "Evidence URL", "Verification", "Reason",
+] + EVIDENCE_COLUMNS + [
     "ARCoS Link", "Debian Link", "Upstream Link",
     "Evidence", "Notes",
 ]
@@ -67,8 +85,9 @@ RELEASE_COLUMNS = [
     "Origin Kind",
     "ARCoS Commit",
     "Upstream Commit",
-    "Commits Behind",
-    "ARCoS-only Commits",
+    BEHIND,
+    AHEAD,
+] + EVIDENCE_COLUMNS + [
     "ARCoS Link",
     "Debian Link",
     "Upstream Link",
@@ -82,6 +101,7 @@ LINK_COLUMNS = {"ARCoS Link", "Debian Link", "Upstream Link"}
 STATUS_FILLS = {
     Status.VERIFIED.value: "D9EAD3",      # green
     Status.NEEDS_REVIEW.value: "FFF2CC",  # amber
+    Status.FAILED.value: "F4CCCC",        # red - the resolver could not finish
     Status.UNRESOLVED.value: "F4CCCC",    # red
     Status.NO_UPSTREAM.value: "EFEFEF",   # grey - a finished answer, not a problem
 }
@@ -115,10 +135,8 @@ def to_row(resolution: Resolution) -> dict:
         "Upstream Tag": resolution.upstream_tag,
         "Origin Kind": resolution.origin_kind or "",
         "Upstream Commit": (resolution.resolved_sha or "")[:12],
-        "Commits Behind": "" if resolution.behind is None else resolution.behind,
-        "ARCoS-only Commits": (
-            "" if resolution.arcos_only is None else resolution.arcos_only
-        ),
+        BEHIND: "" if resolution.behind is None else resolution.behind,
+        AHEAD: "" if resolution.arcos_only is None else resolution.arcos_only,
         "Merge Base": (resolution.merge_base or "")[:12],
         "Vcs-Git (packaging)": (debian.vcs_git or "") if debian else "",
         "Vcs-Git Branch": (debian.vcs_branch or "") if debian else "",
@@ -139,6 +157,54 @@ def to_row(resolution: Resolution) -> dict:
         ) or "",
         "Evidence": "\n".join(resolution.evidence),
         "Notes": "\n".join(resolution.notes),
+        **evidence_cells(resolution),
+    }
+
+
+def evidence_cells(resolution: Resolution) -> dict:
+    """The verification evidence, readable in a cell."""
+    selection = resolution.ref_selection
+    curated = resolution.curated
+    match = resolution.content_match
+    patches = resolution.debian_patches
+    content = ""
+    if match is not None and match.base_tag:
+        content = (
+            f"{match.method}: closest {match.base_tag}, score "
+            f"{(match.score or 0):.3f}, {match.files_differing} of "
+            f"{match.files_compared} files differ; "
+            + (f"APPROVED by {match.verified_by} on {match.verified_at}"
+               if match.approved else "NOT approved")
+        )
+    from .debian.patches import summary_line
+
+    has_counts = resolution.behind is not None or resolution.arcos_only is not None
+    return {
+        "Verification Level": resolution.verification_level,
+        "Review Reasons": ", ".join(resolution.review_reasons),
+        "Warnings": "\n".join(resolution.warnings),
+        "Ref Strategy": selection.strategy.value if selection else "",
+        "Ref Selection": selection.reason if selection else "",
+        "Debian Upstream Version": (selection.debian_upstream_version or "")
+        if selection else "",
+        "Target Series": (selection.series or "") if selection else "",
+        "Upstream Base Tag": (selection.base_tag or "") if selection else "",
+        "ARCoS Contains Base Tag": (
+            "" if not selection or selection.arcos_contains_base is None
+            else ("yes" if selection.arcos_contains_base else "no")
+        ),
+        "Upstream Commit Date": resolution.upstream_commit_date or "",
+        "Merge Bases": " ".join(m[:12] for m in resolution.merge_bases),
+        "Counts Basis": resolution.counts_basis if has_counts else "",
+        "Curated Upstream": (
+            f"{curated.repository or 'no upstream'} @ {curated.ref or 'HEAD'}"
+            if curated and curated.repository else
+            ("no upstream (curated)" if curated else "")
+        ),
+        "Curated Conflict": (curated.conflict or "") if curated else "",
+        "Content Match": content,
+        "Debian Patches": summary_line(patches) if patches else "",
+        "Debian CVEs": ", ".join(patches.cve_ids) if patches else "",
     }
 
 
@@ -177,8 +243,9 @@ def release_row(resolution: Resolution) -> dict:
         "Origin Kind": row["Origin Kind"],
         "ARCoS Commit": row["ARCoS Commit"],
         "Upstream Commit": row["Upstream Commit"],
-        "Commits Behind": row["Commits Behind"],
-        "ARCoS-only Commits": row["ARCoS-only Commits"],
+        BEHIND: row[BEHIND],
+        AHEAD: row[AHEAD],
+        **{column: row[column] for column in EVIDENCE_COLUMNS},
         "ARCoS Link": row["ARCoS Link"],
         "Debian Link": row["Debian Link"],
         "Upstream Link": row["Upstream Link"],
@@ -273,7 +340,10 @@ def _release_mapping_sheet(sheet, rows: list) -> None:
     _fit_columns(
         sheet, RELEASE_COLUMNS,
         wide={"Evidence": 60, "Notes": 45, "Resolution Reason": 50,
-              "Verification Method": 50, "Evidence Source": 34},
+              "Verification Method": 50, "Evidence Source": 34,
+              "Warnings": 50, "Ref Selection": 50, "Counts Basis": 50,
+              "Curated Conflict": 50, "Content Match": 50,
+              "Debian Patches": 50},
     )
 
 
@@ -291,6 +361,10 @@ def _release_summary_sheet(sheet, resolutions: list, release: str) -> None:
 
     for title, values in (
         ("Status", [r.status.value for r in resolutions]),
+        ("Verification level", [r.verification_level for r in resolutions]),
+        ("Review reason", [c for r in resolutions for c in r.review_reasons]),
+        ("Ref strategy", [r.ref_selection.strategy.value for r in resolutions
+                          if r.ref_selection]),
         ("Category", [r.category.value for r in resolutions]),
         ("Resolution method", [r.method.value for r in resolutions]),
         ("Origin kind", [r.origin_kind for r in resolutions if r.origin_kind]),
@@ -309,13 +383,24 @@ def _release_summary_sheet(sheet, resolutions: list, release: str) -> None:
                     )
         sheet.append([])
 
+    warned = sum(1 for r in resolutions if r.warnings)
+    sheet.append(["Rows with plausibility warnings", warned])
+    sheet.append([])
     for line in (
-        "VERIFIED: the upstream repository was contacted, its ref resolved to a "
-        "commit, and where a fork was probed the shared history was proven.",
-        "NEEDS_REVIEW: an answer exists but is not proven - the reason column "
-        "says what is missing.",
+        "VERIFIED: the canonical upstream is identified and the relationship is "
+        "proven - shared git history (SHARED_HISTORY), or a content match a "
+        "person approved (CONTENT_MATCH_APPROVED). A repository that merely "
+        "exists (REF_EXISTS) is never VERIFIED.",
+        "NEEDS_REVIEW: a candidate exists but proof is missing or "
+        "contradictory - the Review Reasons column names it (NO_SHARED_HISTORY, "
+        "CURATED_CONFLICT, INVALID_REF, ...).",
         "NO_UPSTREAM: searched, and there is provably nothing to track. A "
         "finished answer, not a failure.",
+        "FAILED: the resolver could not finish (PROBE_FAILED, NETWORK_ERROR, "
+        "ARCOS_UNREACHABLE). Not a finding about the package - run it again.",
+        f"'{BEHIND}' is a raw count: git rev-list --count --no-merges "
+        f"ARCOS..UPSTREAM against the selected release ref. Backports are not "
+        f"excluded; it is not a list of missing fixes.",
         "Upstream branch and upstream tag are separate columns: a tag is a fixed "
         "point, a branch keeps moving, and they are not interchangeable.",
     ):
@@ -331,9 +416,12 @@ def _release_review_sheet(sheet, rows: list) -> None:
         "Upstream Branch", "Resolution Status", "Resolution Reason",
         "Evidence Source", "Evidence URL", "Evidence",
     ]
+    columns = columns + ["Review Reasons", "Warnings"]
     _write_header(sheet, columns)
     for row in rows:
-        if row.get("Resolution Status") == Status.VERIFIED.value:
+        # Verified rows with plausibility warnings are marked for review too.
+        if row.get("Resolution Status") == Status.VERIFIED.value \
+                and not row.get("Warnings"):
             continue
         sheet.append([row.get(c, "") for c in columns])
     sheet.auto_filter.ref = sheet.dimensions
@@ -401,7 +489,7 @@ def _mapping_sheet(sheet, rows: list) -> None:
                 "solid", fgColor=fill_colour
             )
         for header in LINK_COLUMNS:
-            value = row[header]
+            value = row.get(header)
             if not value:
                 continue
             cell = sheet.cell(row=excel_row, column=COLUMNS.index(header) + 1)
@@ -464,8 +552,8 @@ def _summary_sheet(sheet, rows: list) -> None:
         "drop, or was searched for and has no public upstream."
     ])
     sheet.append([
-        "NEEDS_REVIEW means an upstream was found and verified to exist, but the "
-        "branch was inferred rather than confirmed against the fork's history."
+        "NEEDS_REVIEW means a candidate exists but the relationship is not "
+        "proven or is contradicted - see Review Reasons."
     ])
     for column, width in (("A", 26), ("B", 12), ("C", 12), ("D", 10)):
         sheet.column_dimensions[column].width = width
@@ -473,13 +561,14 @@ def _summary_sheet(sheet, rows: list) -> None:
 
 def _review_sheet(sheet, rows: list) -> None:
     columns = [
-        "Package", "Debian Release", "Status", "Confidence", "Resolution Method",
-        "Upstream Repository", "Upstream Ref", "Origin Kind", "Commits Behind",
-        "Upstream Link", "Evidence", "Notes",
+        "Package", "Debian Release", "Status", "Verification Level",
+        "Review Reasons", "Confidence", "Resolution Method",
+        "Upstream Repository", "Upstream Ref", "Origin Kind", BEHIND,
+        "Warnings", "Upstream Link", "Evidence", "Notes",
     ]
     _write_header(sheet, columns)
     for row in rows:
-        if row.get("Status") == Status.VERIFIED.value:
+        if row.get("Status") == Status.VERIFIED.value and not row.get("Warnings"):
             continue
         if row.get("Status") == Status.NO_UPSTREAM.value:
             continue
@@ -506,3 +595,42 @@ def _fit_columns(sheet, columns: list, wide: dict) -> None:
             ]
         )
         sheet.column_dimensions[letter].width = min(max(longest + 2, 10), 46)
+
+
+def write_resolutions_json(resolutions, path: Path, release: str) -> Path:
+    """The same resolutions at full fidelity, for the dashboard and upstream.md.
+
+    The CSV is for reading and diffing and shortens SHAs; this keeps every
+    field, including the structured evidence. Other releases' entries already
+    in the file are kept, as the canonical CSV keeps their rows.
+    """
+    import json
+    import os
+    import tempfile
+
+    from .services.adapters import to_domain_resolution
+
+    path = Path(path)
+    existing = []
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text()).get("resolutions", [])
+        except ValueError:
+            existing = []
+    kept = [r for r in existing if r.get("debian_release") != release]
+    fresh = [
+        to_domain_resolution(r).model_dump(mode="json", exclude={"resolved_at"})
+        for r in resolutions if r.release == release
+    ]
+    payload = {"version": 1, "resolutions": kept + fresh}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, indent=1, sort_keys=True))
+        os.replace(temp, path)
+    except BaseException:
+        if os.path.exists(temp):
+            os.unlink(temp)
+        raise
+    return path

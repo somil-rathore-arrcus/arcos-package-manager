@@ -13,6 +13,7 @@ from typing import Optional
 from .. import links
 from ..domain.enums import (
     PackageCategory, ResolutionMethod, ResolutionMode, ResolutionStatus,
+    ReviewReason, VerificationLevel,
 )
 from ..domain.models import (
     Package as DomainPackage, PackageSource, Repository, ResolutionEvidence,
@@ -38,6 +39,7 @@ _STATUS = {
     Status.VERIFIED: ResolutionStatus.VERIFIED,
     Status.NEEDS_REVIEW: ResolutionStatus.NEEDS_REVIEW,
     Status.NO_UPSTREAM: ResolutionStatus.NO_UPSTREAM,
+    Status.FAILED: ResolutionStatus.FAILED,
     Status.UNRESOLVED: ResolutionStatus.FAILED,
 }
 
@@ -99,8 +101,20 @@ def to_domain_resolution(
         upstream_commit=resolution.resolved_sha,
         origin_kind=resolution.origin_kind,
         merge_base=resolution.merge_base,
+        merge_bases=list(resolution.merge_bases or (
+            [resolution.merge_base] if resolution.merge_base else [])),
         behind=resolution.behind,
         arcos_only=resolution.arcos_only,
+        counts_basis=resolution.counts_basis if resolution.behind is not None
+        or resolution.arcos_only is not None else "",
+        upstream_commit_date=resolution.upstream_commit_date,
+        verification_level=VerificationLevel(resolution.verification_level),
+        review_reasons=[ReviewReason(r) for r in resolution.review_reasons],
+        warnings=list(resolution.warnings),
+        ref_selection=resolution.ref_selection,
+        curated=resolution.curated,
+        content_match=resolution.content_match,
+        debian_patches=resolution.debian_patches,
         reason=resolution.reason or None,
         evidence_source=resolution.evidence_source,
         evidence_url=resolution.evidence_url,
@@ -176,7 +190,13 @@ def rejected_candidates(evidence_lines) -> list:
 
 
 def _candidates(resolution: Resolution) -> list:
-    """Reconstruct what was considered, so a review can see the rejected options."""
+    """What was considered, so a review can see the rejected options.
+
+    The probe's own list when there is one - every ref it measured, with its
+    counts - and otherwise a reconstruction from the evidence.
+    """
+    if resolution.candidates:
+        return list(resolution.candidates) + rejected_candidates(resolution.evidence)
     candidates = []
     if resolution.upstream and resolution.upstream.repository:
         candidates.append(

@@ -15,17 +15,25 @@ const METHOD_LABEL: Record<string, string> = {
   not_applicable: 'Not applicable',
 }
 
+const PROVEN = ['SHARED_HISTORY', 'CONTENT_MATCH_APPROVED']
+
 export function ResolutionCard({
-  resolution, onCompare, comparing,
+  resolution, onCompare, comparing, onApproveContentBase, approving,
 }: {
   resolution: UpstreamResolution
   onCompare: () => void
   comparing: boolean
+  onApproveContentBase?: (tag: string, verifiedBy: string) => void
+  approving?: boolean
 }) {
   const [showEvidence, setShowEvidence] = useState(false)
+  const [approver, setApprover] = useState('')
   const upstream = resolution.upstream_repository
+  const selection = resolution.ref_selection
+  const match = resolution.content_match
   const canCompare =
     (resolution.status === 'VERIFIED' || resolution.status === 'PARTIAL') &&
+    PROVEN.includes(resolution.verification_level) &&
     !!upstream && !!resolution.upstream_ref
 
   return (
@@ -119,15 +127,106 @@ export function ResolutionCard({
             <span className="small">{resolution.reason}</span>
           </Definition>
         )}
-        {resolution.merge_base && (
-          <Definition term="Common ancestor">
-            <code>{resolution.merge_base.slice(0, 12)}</code>
-            {resolution.behind != null && (
-              <> · {resolution.behind} behind · {resolution.arcos_only ?? 0} ARCoS-only</>
+        <Definition term="Verification level">
+          <Badge tone={PROVEN.includes(resolution.verification_level) ? 'tone-good' : 'tone-warn'}>
+            {resolution.verification_level}
+          </Badge>
+          {resolution.review_reasons.length > 0 && (
+            <> {resolution.review_reasons.map((r) => (
+              <Badge key={r} tone={['PROBE_FAILED', 'NETWORK_ERROR', 'ARCOS_UNREACHABLE'].includes(r) ? 'tone-bad' : 'tone-warn'}>{r}</Badge>
+            ))}</>
+          )}
+        </Definition>
+        {selection && (
+          <Definition term="Release reference">
+            <code>{selection.ref}</code> ({selection.kind}, {selection.strategy.replace(/_/g, ' ')})
+            {selection.is_fallback && <> <Badge tone="tone-warn">fallback</Badge></>}
+            {selection.base_tag && (
+              <> · base <code>{selection.base_tag}</code>
+                {selection.arcos_contains_base === false && <span className="small"> (not in ARCoS)</span>}
+              </>
+            )}
+            {selection.series && <> · series <code>{selection.series}</code></>}
+            <div className="muted small">{selection.reason}</div>
+          </Definition>
+        )}
+        {resolution.curated && (resolution.curated.repository || resolution.curated.conflict) && (
+          <Definition term="Curated mapping">
+            {resolution.curated.repository
+              ? <><code>{resolution.curated.repository}</code> @ <code>{resolution.curated.ref ?? 'HEAD'}</code></>
+              : 'no upstream'}
+            {resolution.curated.conflict && (
+              <div className="small"><Badge tone="tone-warn">conflict</Badge> {resolution.curated.conflict}</div>
             )}
           </Definition>
         )}
+        {resolution.merge_base && (
+          <Definition term={resolution.merge_bases.length > 1 ? 'Merge bases' : 'Common ancestor'}>
+            {(resolution.merge_bases.length ? resolution.merge_bases : [resolution.merge_base]).map((m) => (
+              <code key={m} style={{ marginRight: 6 }}>{m.slice(0, 12)}</code>
+            ))}
+          </Definition>
+        )}
+        {resolution.behind != null && (
+          <Definition term="Raw commit counts">
+            {resolution.behind} upstream commit(s) not in ARCoS · {resolution.arcos_only ?? 0} ARCoS commit(s) not upstream
+            <div className="muted small">
+              {resolution.counts_basis}. Not a list of missing fixes — compare to see what is present.
+            </div>
+          </Definition>
+        )}
+        {resolution.comparison && (
+          <Definition term="Backlog (last comparison)">
+            {resolution.comparison.relevant_upstream} relevant ·{' '}
+            {resolution.comparison.definitely_present + resolution.comparison.probably_present} present ·{' '}
+            {resolution.comparison.missing} missing · {resolution.comparison.unknown_presence} unknown ·{' '}
+            {resolution.comparison.critical_missing} critical
+          </Definition>
+        )}
+        {resolution.debian_patches?.available && (
+          <Definition term="Debian patches">
+            {resolution.debian_patches.patches.length} patch(es),{' '}
+            {resolution.debian_patches.patches.filter((p) => p.category === 'security').length} security
+            {resolution.debian_patches.cve_ids.length > 0 && <> · {resolution.debian_patches.cve_ids.join(', ')}</>}
+          </Definition>
+        )}
       </dl>
+
+      {resolution.warnings.length > 0 && (
+        <div className="alert warn" style={{ marginTop: 14 }}>
+          <h3>Marked for review</h3>
+          {resolution.warnings.map((w, i) => <p key={i}>{w}</p>)}
+        </div>
+      )}
+
+      {match && match.base_tag && (
+        <div className={`alert ${match.approved ? 'info' : 'warn'}`} style={{ marginTop: 14 }}>
+          <h3>Content match — no shared git history</h3>
+          <p>
+            Closest upstream release by content: <code>{match.base_tag}</code> (score{' '}
+            {(match.score ?? 0).toFixed(3)}, {match.files_differing} of {match.files_compared} files
+            differ, compared against the {match.arcos_tree_label || 'ARCoS tree'}).
+          </p>
+          {match.approved
+            ? <p>Approved by {match.verified_by} on {match.verified_at}. Counts are synthesized from it.</p>
+            : onApproveContentBase && (
+              <div className="row" style={{ gap: 8 }}>
+                <input
+                  type="text" placeholder="Your name (recorded as approver)"
+                  aria-label="Approver name" value={approver}
+                  onChange={(e) => setApprover(e.target.value)}
+                />
+                <button
+                  disabled={!approver.trim() || approving}
+                  onClick={() => onApproveContentBase(match.base_tag!, approver.trim())}
+                >
+                  {approving ? 'Recording…' : `Approve ${match.base_tag} as the base`}
+                </button>
+                <span className="muted small">Takes effect when the package is next resolved.</span>
+              </div>
+            )}
+        </div>
+      )}
 
       {resolution.status === 'NO_UPSTREAM' && (
         <div className="alert info" style={{ marginTop: 14 }}>
@@ -144,9 +243,19 @@ export function ResolutionCard({
         <div className="alert warn" style={{ marginTop: 14 }}>
           <h3>Needs review</h3>
           <p>
-            An upstream was found and exists, but it has not been confirmed. No
-            upstream has been invented for this package — the evidence below is
-            everything that is known.
+            A candidate upstream exists, but its relationship to the fork is not
+            proven or is contradicted ({resolution.review_reasons.join(', ') || 'see the reason'}).
+            No upstream has been invented and no count is reported as fact.
+          </p>
+        </div>
+      )}
+
+      {resolution.status === 'FAILED' && (
+        <div className="alert error" style={{ marginTop: 14 }}>
+          <h3>Resolution could not complete</h3>
+          <p>
+            {resolution.review_reasons.join(', ')}: this is a failure to measure,
+            not a finding about the package. Resolve again once the cause is fixed.
           </p>
         </div>
       )}
@@ -168,7 +277,7 @@ export function ResolutionCard({
           <span className="muted small">
             {resolution.status === 'NO_UPSTREAM'
               ? 'No verified upstream available.'
-              : 'A verified upstream is needed before comparing.'}
+              : 'A proven relationship (shared history or an approved content match) is needed before comparing.'}
           </span>
         )}
       </div>
@@ -194,6 +303,8 @@ export function ResolutionCard({
                       {c.accepted ? 'accepted' : 'rejected'}
                     </Badge>{' '}
                     <code>{c.repository}</code>{c.ref ? ` @ ${c.ref}` : ''}
+                    {c.strategy && <span className="muted small"> ({c.strategy.replace(/_/g, ' ')})</span>}
+                    {c.behind != null && <span className="small"> · {c.behind} not in ARCoS</span>}
                     {c.rejected_reason && <div className="muted small">{c.rejected_reason}</div>}
                   </li>
                 ))}

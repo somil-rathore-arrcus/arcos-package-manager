@@ -15,10 +15,7 @@ from .config import (
 )
 from .discovery.catalog import build_catalog, write_catalog
 from .discovery.gitmodules import discover
-from .gitio.ancestry import AncestryChecker
-from .gitio.verify import Verifier
 from .report import write_csv, write_xlsx
-from .resolve import Resolver
 
 log = logging.getLogger("apm")
 
@@ -107,13 +104,11 @@ def cmd_resolve(args) -> int:
             print(f"unknown package(s): {', '.join(sorted(missing))}", file=sys.stderr)
             return 1
 
-    ancestry = AncestryChecker(
-        transports,
-        env.cache_dir / "ancestry",
-        enabled=settings.ancestry.get("enabled", True) and not args.no_ancestry,
-    )
-    resolver = Resolver(
-        settings, load_overrides(), cache, Verifier(transports), ancestry
+    from .services.container import build_resolver
+
+    resolver = build_resolver(
+        env, settings, transports, cache, ancestry_enabled=not args.no_ancestry,
+        overrides=load_overrides(),
     )
     resolutions = resolver.resolve_all(packages, args.release or None)
 
@@ -129,6 +124,109 @@ def cmd_resolve(args) -> int:
     print(f"wrote {out_dir / 'upstream-mapping.csv'}")
     print(f"wrote {out_dir / 'upstream-mapping.xlsx'}")
     return 0
+
+
+def cmd_compare(args) -> int:
+    """Run the full comparison for packages and record the snapshot.
+
+    What debian/upstream.md needs to state a real backlog - present, missing,
+    critical - rather than a raw commit count.
+    """
+    from .services.comparison_service import ComparisonError
+    from .services.container import Container
+
+    container = Container()
+    failures = 0
+    for name in args.package:
+        try:
+            resolution = container.upstream.resolve(name, args.release)
+            result = container.comparison.compare(resolution, refresh=args.refresh)
+        except (ComparisonError, Exception) as exc:  # noqa: BLE001 - per package
+            failures += 1
+            print(f"{name}: {getattr(exc, 'code', type(exc).__name__)}: {exc}",
+                  file=sys.stderr)
+            continue
+        s = result.summary
+        print(f"\n{name} ({args.release})")
+        print(f"  ARCoS commit        {result.arcos_commit}")
+        print(f"  upstream            {result.upstream_repository} @ "
+              f"{result.upstream_ref} ({result.upstream_commit})")
+        print(f"  upstream base tag   {s.base_tag or 'N/A'}   series {s.series or 'N/A'}")
+        print(f"  basis               {s.counts_basis}")
+        print(f"  relevant upstream   {s.relevant_upstream}")
+        print(f"    already present   {s.definitely_present + s.probably_present} "
+              f"(definitely {s.definitely_present}, probably {s.probably_present})")
+        print(f"    missing           {s.missing}")
+        print(f"    unknown           {s.unknown_presence}")
+        print(f"    reverted upstream {s.reverted_upstream}")
+        print(f"  critical missing    {s.critical}   stable {s.stable_relevant}")
+        print(f"  ARCoS-specific      {s.arcos_only}")
+        print(f"  backport detection  {s.backport_detection}")
+        if result.debian_patches:
+            from .debian.patches import summary_line
+            print(f"  Debian patches      {summary_line(result.debian_patches)}")
+        for line in result.security_sources:
+            print(f"  security source     {line}")
+        for warning in result.warnings:
+            print(f"  warning: {warning}")
+    return 1 if failures else 0
+
+
+def cmd_approve_content_base(args) -> int:
+    """Record a person's approval of a content-matched base tag."""
+    from .services.container import Container
+
+    if args.confirm != args.package:
+        print(f"--confirm must repeat the package name ({args.package}); nothing "
+              f"was recorded.", file=sys.stderr)
+        return 2
+    container = Container()
+    resolution = container.mapping.get(args.package, args.release)
+    if resolution is None or resolution.content_match is None:
+        print(f"no content match recorded for {args.package}/{args.release}; run "
+              f"`apm resolve-release --release {args.release} --package "
+              f"{args.package} --no-discover` first", file=sys.stderr)
+        return 1
+    match = resolution.content_match
+    tag = args.tag or match.base_tag
+    candidate = next((c for c in match.candidates if c.tag == tag), None)
+    if candidate is None:
+        print(f"{tag} was not among the tags compared "
+              f"({', '.join(c.tag for c in match.candidates[:10])})", file=sys.stderr)
+        return 1
+    listing = container.verifier.list_refs(resolution.upstream_repository.url)
+    sha = listing.tags.get(tag) if listing.ok else None
+    if not sha:
+        print(f"could not resolve tag {tag} on "
+              f"{resolution.upstream_repository.url}: "
+              f"{listing.error or 'no such tag'}", file=sys.stderr)
+        return 1
+    record = container.approvals.approve(args.package, args.release, {
+        "repository": resolution.upstream_repository.url,
+        "base_tag": tag, "base_sha": sha, "method": candidate.method,
+        "score": candidate.score, "files_compared": candidate.files_compared,
+        "files_differing": candidate.files_differing,
+        "lines_differing": (candidate.lines_added or 0) + (candidate.lines_removed or 0)
+        if candidate.lines_added is not None else None,
+        "arcos_tree": candidate.arcos_tree,
+        "arcos_commit": resolution.arcos_commit,
+        "verified_by": args.verified_by,
+        "note": args.note or "",
+    })
+    print(f"approved {args.package}/{args.release}: base {tag} ({sha[:12]}) by "
+          f"{record['verified_by']} at {record['verified_at']}")
+    print(f"recorded in {container.approvals.path}")
+    print(f"now re-resolve: apm resolve-release --release {args.release} "
+          f"--package {args.package} --no-discover")
+    return 0
+
+
+def cmd_doctor(args) -> int:
+    """Check, without printing any secret, that this host can do the job."""
+    from .doctor import run_doctor
+
+    return run_doctor(repositories=args.repo or [], release=args.release,
+                      check_manifest=not args.skip_git)
 
 
 def main(argv=None) -> int:
@@ -185,6 +283,38 @@ def main(argv=None) -> int:
     p_md.add_argument("--include-needs-review", action="store_true")
     p_md.add_argument("--offline", action="store_true")
     p_md.set_defaults(func=cmd_generate_upstream_md)
+
+    p_compare = sub.add_parser(
+        "compare", help="run the full comparison and record its snapshot",
+    )
+    p_compare.add_argument("--release", default="bookworm")
+    p_compare.add_argument("--package", action="append", required=True)
+    p_compare.add_argument("--refresh", action="store_true",
+                           help="discard the workspace and fetch both sides again")
+    p_compare.set_defaults(func=cmd_compare)
+
+    p_approve = sub.add_parser(
+        "approve-content-base",
+        help="approve a content-matched base tag for a fork with no shared history",
+    )
+    p_approve.add_argument("--release", default="bookworm")
+    p_approve.add_argument("--package", required=True)
+    p_approve.add_argument("--tag", help="default: the best content match")
+    p_approve.add_argument("--verified-by", required=True,
+                           help="the person accountable for the decision")
+    p_approve.add_argument("--confirm", required=True,
+                           help="repeat the package name")
+    p_approve.add_argument("--note")
+    p_approve.set_defaults(func=cmd_approve_content_base)
+
+    p_doctor = sub.add_parser(
+        "doctor", help="check storage, git access and GitHub API access",
+    )
+    p_doctor.add_argument("--release", default="bookworm")
+    p_doctor.add_argument("--repo", action="append",
+                          help="owner/name to check the token against")
+    p_doctor.add_argument("--skip-git", action="store_true")
+    p_doctor.set_defaults(func=cmd_doctor)
 
     from .publish_upstream_md import add_arguments as publish_arguments
 

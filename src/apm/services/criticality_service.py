@@ -17,7 +17,7 @@ import re
 from typing import Iterable, List
 
 from ..domain.enums import Criticality
-from ..domain.models import CriticalityAssessment
+from ..domain.models import CriticalityAssessment, SecurityEvidence
 
 # CVE-YYYY-NNNN..NNNNNNN
 CVE = re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE)
@@ -76,7 +76,35 @@ class CriticalityService:
                 "Fixes: " + ", ".join(f[:12] for f in fixes)
             )
 
+        if assessment.evidence:
+            assessment.sources.append("commit-message")
         assessment.level = self._level(assessment)
+        return assessment
+
+    def enrich(self, assessment: CriticalityAssessment,
+               external: List[SecurityEvidence]) -> CriticalityAssessment:
+        """Fold in evidence from outside the commit message.
+
+        A Debian security patch or an OSV record naming this commit as a fix is
+        stronger than anything the message says, so it makes the commit
+        CRITICAL. No external evidence changes nothing: silence from a database
+        is not a statement that a commit is safe.
+        """
+        for item in external:
+            if any(e.identifier == item.identifier and e.source == item.source
+                   for e in assessment.external):
+                continue
+            assessment.external.append(item)
+            if item.source not in assessment.sources:
+                assessment.sources.append(item.source)
+            if CVE.fullmatch(item.identifier) and item.identifier not in assessment.cve_ids:
+                assessment.cve_ids.append(item.identifier)
+            assessment.evidence.append(
+                f"{item.source}: {item.identifier}"
+                + (f" - {item.detail}" if item.detail else "")
+            )
+        if assessment.external:
+            assessment.level = Criticality.CRITICAL
         return assessment
 
     @staticmethod

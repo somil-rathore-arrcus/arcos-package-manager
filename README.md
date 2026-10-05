@@ -96,18 +96,22 @@ See [docs/upstream-resolution.md](docs/upstream-resolution.md).
 
 ### 4. Comparison — from the commit graph
 
-Never from version strings. Three sets, kept apart: missing upstream,
-ARCoS-specific, already backported. Counting local work as a missing upstream
-patch would report work already done as a backlog still to do.
-
-Backports are found with `git patch-id --stable`, which is stable across the SHA
-change every backport necessarily causes.
+Never from version strings. Head-based sets (`UPSTREAM ^ARCOS`, `ARCOS
+^UPSTREAM`), so criss-cross history cannot inflate them. Every relevant upstream
+commit is classified `DEFINITELY_PRESENT` (cherry-pick trailer or identical
+`git patch-id --stable`), `PROBABLY_PRESENT` (`git apply --check -R`, or an
+adapted backport whose lines are all there), `MISSING` or `UNKNOWN` (partial,
+unchecked) - a differing patch-id alone never means missing. Reverts are paired.
+Debian's own patches for the shipped version are checked against the ARCoS tree
+and reported beside the commits, never among them.
 
 See [docs/git-comparison.md](docs/git-comparison.md).
 
 ### 5. Criticality — evidence only
 
-`CRITICAL` needs a CVE or a named advisory. `STABLE_RELEVANT` needs `Cc: stable`.
+Commit messages are one signal; Debian security patches (whose DEP-3 `Origin:`
+names the upstream commit) and OSV.dev fix commits are others. `CRITICAL` needs a
+CVE or a named advisory from any of them. `STABLE_RELEVANT` needs `Cc: stable`.
 `NORMAL` needs a `Fixes:` trailer. Everything else is `UNKNOWN` — which is not the
 same as safe, only honest. A commit is never called critical because its subject
 line sounds alarming.
@@ -116,7 +120,9 @@ line sounds alarming.
 
 Preview in a throwaway workspace → cherry-pick to a **new** branch → push → pull
 request. Four explicit steps. Conflicts stop the series and are never resolved
-automatically.
+automatically. The server re-validates the selection against the current target
+tip and upstream ref, and refuses a cherry-pick onto a tip the preview did not
+use.
 
 See [docs/patch-workflow.md](docs/patch-workflow.md).
 
@@ -136,11 +142,24 @@ so re-runs resume. The target branch is never written to.
 
 | Status | Meaning |
 |---|---|
-| `VERIFIED` | Upstream contacted, ref resolved, history shared where probed |
-| `PARTIAL` | Resolved, not fully confirmed |
-| `NEEDS_REVIEW` | Exists, but the ref was inferred or no candidate shared history |
+| `VERIFIED` | Upstream identified **and** relationship proven: shared git history, or a content match a person approved |
+| `NEEDS_REVIEW` | A candidate exists, but proof is missing or contradictory - `Review Reasons` names it (`NO_SHARED_HISTORY`, `CURATED_CONFLICT`, `INVALID_REF`, ...) |
 | `NO_UPSTREAM` | Searched, and there is provably nothing to track |
-| `FAILED` | Resolution errored |
+| `FAILED` | The resolver could not finish (`PROBE_FAILED`, `NETWORK_ERROR`, `ARCOS_UNREACHABLE`) - not a finding |
+
+**Verification level** is separate from status: `REF_EXISTS` (ls-remote
+answered - existence only, never enough for VERIFIED), `SHARED_HISTORY`,
+`CONTENT_MATCH_APPROVED`. **Confidence** is separate again.
+
+**The ref is chosen for the release**, not taken from the remote's default
+branch: the upstream tag for Debian's version is the base, and the maintenance
+branch containing it is the target (or the tag itself). `master`, `main` and
+`debian/sid` are labelled fallbacks.
+
+**Raw counts are labelled raw.** `Upstream Commits Not In ARCoS (raw)` is
+`rev-list ARCOS..UPSTREAM` against that ref - backports not excluded. The
+backlog that matters - relevant, already present, missing, critical - comes from
+`apm compare` and is what `debian/upstream.md` records.
 
 **Category** is separate, and answers "what kind of package is this":
 `debian_upstream`, `debian_no_upstream`, `third_party`, `arrcus_native`,
@@ -148,6 +167,10 @@ so re-runs resume. The target branch is never written to.
 
 **Origin kind** says whether the fork descends from the project's own repository
 or from Debian's packaging repository — it changes what pulling a patch means.
+
+Other commands: `apm compare --package <p>` (full comparison, recorded for
+`debian/upstream.md`), `apm approve-content-base` (no-shared-history forks),
+`apm doctor` (storage, git and GitHub checks; prints no secret).
 
 ## Directory structure
 
@@ -189,6 +212,7 @@ All under `/api`. Full schema at `/docs` when the backend is running.
 | POST | `/upstream-md/generate` | Render `debian/upstream.md` |
 | POST | `/upstream-md/pr` | Propose it; needs `confirm: true` (or `dry_run: true`) |
 | GET | `/upstream-md/prs` | What proposing has done so far (the ledger) |
+| POST | `/upstream/content-base/approve` | Record a person's approval of a content-matched base |
 | GET | `/reports`, `/reports/{name}` | Generated mapping workbooks and CSVs |
 
 ## Configuration

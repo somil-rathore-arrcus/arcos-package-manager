@@ -6,57 +6,95 @@ A Debian version says what the packaging claims. It does not say what the branch
 contains, and two forks at the same version can differ by hundreds of commits.
 Every number this tool reports comes from the commit graph.
 
-## The three sets
+## The sets
 
-Given a merge base `M`, the upstream head `U` and the ARCoS head `A`:
+Given the ARCoS commit `A` and the selected upstream ref `U` (the release's
+maintenance branch or tag - see upstream-resolution.md):
 
 ```
-missing upstream    M..U, minus anything already present by patch-id
-ARCoS-specific      M..A, minus the backports it already carries
-already backported  in both, under different SHAs
+relevant upstream   U ^A   upstream commits the ARCoS commit cannot reach
+  already present     ... whose change is in ARCoS anyway
+  missing             ... whose change is not
+  unknown             ... where the evidence does not decide
+ARCoS-specific      A ^U   minus the commits that carry upstream changes
 ```
+
+Both are head-based. `git merge-base --all` is still computed, but only to
+prove the histories are related: with criss-cross history there are several
+merge bases, and counting "everything after one of them" reports ARCoS's own
+commits as missing once upstream has merged them. `apm/gitio/ancestry_probe.sh`
+uses the same ranges.
 
 Worked example. Upstream `A→B→C→D→E`, ARCoS `A→B→C→X→Y`:
 
 ```
 merge base        C
-missing upstream  D, E
+relevant upstream D, E
 ARCoS-specific    X, Y
 ```
 
-`X` and `Y` are local work. Counting them as missing upstream commits would
-report work already done as a backlog still to do — the single most misleading
-thing this tool could say.
-
 Merges are excluded throughout (`--no-merges`): a merge commit cannot be
-cherry-picked, so counting them would report a backlog larger than the number of
-patches the tool can actually offer. The ancestry probe used by the mapping uses
-the same basis, so "behind" means the same thing in both places.
+cherry-picked.
+
+When the upstream ref has a base tag (the tag for Debian's version), each
+missing commit is also marked `in_base_release` - part of the release Debian
+ships, as opposed to a later fix in the series.
 
 ## No common ancestor
 
-Some ARCoS packages were imported from tarballs rather than forked. `babeltrace`,
-`ctypesgen` and `rsyslog` share no commit with any candidate upstream.
+A fork imported from a tarball has none. The comparison refuses
+(`NO_COMMON_ANCESTOR`, HTTP 422) rather than inventing a number - unless a
+person approved a content match, in which case the ranges are
+`U ^<approved tag>` and `A ^<matched ARCoS tree>`, and the result says
+`synthesized_ancestry: true` in the summary, the warnings and the basis.
 
-The comparison refuses rather than inventing a number, and the API returns
-`NO_COMMON_ANCESTOR` (HTTP 422) with an explanation. A backlog computed against a
-tree with no shared history is not a smaller truth, it is a fiction.
+## Backport detection, in tiers
 
-## Backport detection
+A backport's SHA always differs, and an adapted backport's diff does too, so no
+single test is enough. Each relevant upstream commit gets the strongest answer
+the evidence supports (`services/backport_service.py`):
 
-A backport is the same change committed again — cherry-picked, rebased, or
-applied by hand — so its SHA is necessarily different. Comparing SHAs reports it
-as missing and invites someone to apply it twice.
+| Presence | Evidence |
+|---|---|
+| `DEFINITELY_PRESENT` | an ARCoS commit carries `(cherry picked from commit X)` (or the kernel's `commit X upstream`), or an identical `git patch-id --stable` |
+| `PROBABLY_PRESENT` | `git apply --check -R` succeeds against the ARCoS tree, or - for an adapted backport whose context differs - every line it adds is already in each file it touches |
+| `MISSING` | `git apply --check` succeeds and the reverse does not; or none of its lines are present; or ARCoS applied it and later reverted it |
+| `UNKNOWN` | partially present (some files only), empty, beyond the content-check limit, or undecidable |
 
-`git patch-id --stable` hashes the diff, ignoring commit metadata, context line
-numbers and whitespace-only churn, so the same change hashes the same however it
-arrived. `PatchIdService` computes patch ids for both sides and matches them.
+Reverts are paired: an upstream commit reverted later in the same range nets to
+nothing and is counted as `reverted_upstream`, not missing.
 
-Subject-line matching is deliberately not used: it breaks on reworded backports
-and produces false matches between unrelated commits that share a subject.
+The content checks run in one shell call against a private index built from the
+ARCoS commit; nothing is checked out. They need file contents, so they run
+only when blobs were backfilled (below); beyond that limit commits are
+`UNKNOWN`, never assumed missing.
 
-Very long ranges are capped (2000 commits by default) and the cap is reported in
-`warnings` rather than applied silently.
+## Debian patches
+
+The quilt patches of the shipped Debian version (`debian/patches/series`) are
+checked against the ARCoS tree too: carried in ARCoS's own series
+(`DEFINITELY_PRESENT`), already applied to the source (`PROBABLY_PRESENT`),
+applying cleanly (`MISSING`), or neither (`UNKNOWN`). They are reported beside
+the commit lists and never counted among them: they are packaging, not upstream
+commits.
+
+## Security evidence
+
+`CriticalityService`'s commit-message rules (CVE, advisory, `Cc: stable`,
+`Fixes:`) are one signal. `SecurityService` adds others: Debian's patches and
+changelog for the shipped version (a CVE patch whose DEP-3 `Origin:` names an
+upstream commit makes that commit `CRITICAL`), and OSV.dev (vulnerabilities
+affecting the merge base, with the commits that fix them). A source that cannot
+answer is reported as unavailable, and no evidence leaves a commit `UNKNOWN`,
+never safe.
+
+## Stale results
+
+The comparison always fetches both refs. If the upstream ref has moved since
+the mapping was made, it says so. Its headline numbers are stored in
+`out/comparisons/<release>/<package>.json` with the two commits they came from,
+and handed to the dashboard, the mapping and `debian/upstream.md` only while a
+resolution still names exactly those commits.
 
 ## Fetching: blobless for the graph, blobs only when diffing
 

@@ -16,7 +16,7 @@ from test_upstream_md_publisher import (
 
 def _setup(tmp_path):
     remote = Remote(tmp_path / "remote")
-    resolution = _resolution(url=remote.url)
+    resolution = _resolution(remote=remote)
     service = UpstreamMdService()
     content = service.render(resolution)
     out = tmp_path / "out"

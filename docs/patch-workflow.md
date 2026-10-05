@@ -37,7 +37,25 @@ conflicting paths, and aborts. It is never resolved automatically — choosing a
 side of a conflict is a decision about the product, and guessing it silently is
 how wrong code ships.
 
-There is no force option.
+There is no force option - in the service or in the git layer
+(`GitWorkspace.push` has no force parameter).
+
+## Re-validation: the selection must still be true
+
+A comparison may have been computed against the pinned commit, or an hour ago,
+and branches move. So the server re-checks the selection against the branches
+as they are **now**, in the preview and again in the cherry-pick:
+
+- every selected commit must be in the current missing set - reachable from the
+  upstream ref, not reachable from the current target tip. A commit the target
+  already has, or one an upstream rewrite removed, is refused with
+  `STALE_SELECTION` (HTTP 409), listing each one;
+- the preview reports the tip it applied onto (`base_sha`) and whether the
+  target moved since the comparison (`base_moved`);
+- the cherry-pick must pass that `base_sha` back as `expected_base_sha`, and is
+  refused with `BASE_MOVED` if the target has moved since the preview. The API
+  refuses a cherry-pick without it: nothing is applied to a tip nobody
+  previewed.
 
 ## Cherry-pick
 

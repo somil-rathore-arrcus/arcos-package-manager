@@ -85,7 +85,9 @@ that cannot open PRs never leaves a pushed branch behind.
 
 The token needs **Pull requests: Read and write** and **Metadata: Read** on the
 package repositories (fine-grained), or `repo` scope (classic). It does not
-need Contents: write. If the organisation enforces SAML, the token must be
+need Contents: write, because branches are pushed over SSH. For a first test,
+access to the one repository being proposed (e.g. `Arrcus/mstpd`) is enough;
+pre-flight checks the token against exactly the repositories in the run. If the organisation enforces SAML, the token must be
 SSO-authorised; pre-flight reports GitHub's SSO message verbatim. A 404 on a
 private repository is what an unauthorised token looks like - check the token
 before the spelling.
@@ -130,10 +132,55 @@ Both mount read-only. `APM_UID` should match the owner of those files.
 rebuild never loses them. Create it before the first start and make it writable
 by `APM_UID` (setting `APM_UID=$(id -u)` in `.env` is simplest).
 
-`./config` stays mounted **read-only**. The one file under it that is generated -
-the package catalogue `discover` (and `resolve_bookworm`) rewrites - is written to
-`APM_PACKAGES_FILE`, which the compose file sets to `/app/out/packages.yaml`.
+`./config` stays mounted **read-only**. Everything generated at runtime goes to
+the writable `out/` mount: the package catalogue `discover` (and
+`resolve_bookworm`) rewrites is written to `APM_PACKAGES_FILE`
+(`/app/out/packages.yaml`), approvals to `APM_APPROVALS_FILE`
+(`/app/out/approvals.yaml`), and comparison snapshots to `out/comparisons/`.
 Until the first discovery, the committed `config/packages.yaml` is read instead.
+
+`.env` names key and known_hosts files by their **host** paths; the compose
+file mounts them read-only and points the container at the mounted copies, so
+the container never tries to use a path that only exists on the host.
+
+## On the host that holds repository access (the authoritative environment)
+
+When the machine that runs the tool is also the machine whose SSH key reaches
+the private repositories, no bridge is needed: git runs inside the container
+with that key mounted read-only. This is the supported setup for development
+and testing from now on; nothing depends on a second machine.
+
+```
+# .env on that host - values are placeholders
+APM_GIT_BACKEND=local
+APM_GIT_SSH_KEY_FILE=/home/<user>/.ssh/id_ed25519
+APM_SSH_KNOWN_HOSTS_FILE=/home/<user>/.ssh/known_hosts
+APM_UID=<id -u>                          # the key's owner, so it is readable
+APM_WORKSPACE_HOST_DIR=/var/tmp/arcos-package-manager   # reuse existing clones
+APM_GITHUB_TOKEN=<entered on the host by its owner; never in chat or git>
+APM_COMMITTER_NAME=<person accountable for the PRs>
+APM_COMMITTER_EMAIL=<their address>
+```
+
+Pushes use that SSH key; the token is used only for the GitHub REST API (find
+and open pull requests). Then:
+
+```bash
+mkdir -p out && docker compose up -d --build
+docker compose exec backend apm doctor --repo Arrcus/mstpd
+```
+
+`apm doctor` checks, without printing any secret: `out/` and the runtime
+package catalogue are writable and `config/` is not written to; the workspace
+and git version; private access to the release manifest; public upstream
+access; the GitHub SSH identity used for pushes; and, with a token, GitHub API
+reachability and that the token can see each `--repo`.
+
+The backend test suite runs against the same image:
+
+```bash
+docker build --target test -t apm-test . && docker run --rm apm-test
+```
 
 ## Deploying to a VM
 

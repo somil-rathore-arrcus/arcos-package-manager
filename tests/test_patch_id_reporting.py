@@ -94,7 +94,7 @@ def test_no_patch_ids_for_a_range_that_has_commits_is_a_failure_to_look():
     """The bug in one assertion: 142 commits, zero patch ids, reported as fine."""
     result = PatchIdService().compare(
         FakeWorkspace(upstream={}, arcos={"a": "p"}),
-        "base", "up", "arcos", expected_upstream=142, expected_arcos=272,
+        "up ^arcos", "arcos ^up", expected_upstream=142, expected_arcos=272,
     )
     assert result.available is False
     assert "142 commits" in result.reason
@@ -104,7 +104,7 @@ def test_no_patch_ids_for_a_range_that_has_commits_is_a_failure_to_look():
 def test_the_arcos_side_is_checked_too():
     result = PatchIdService().compare(
         FakeWorkspace(upstream={"u": "p"}, arcos={}),
-        "base", "up", "arcos", expected_upstream=1, expected_arcos=272,
+        "up ^arcos", "arcos ^up", expected_upstream=1, expected_arcos=272,
     )
     assert result.available is False
     assert "ARCoS side" in result.reason
@@ -114,7 +114,7 @@ def test_an_empty_range_with_no_patch_ids_is_still_a_measured_zero():
     """Nothing to diff is not the same as failing to diff."""
     result = PatchIdService().compare(
         FakeWorkspace(upstream={}, arcos={}),
-        "base", "up", "arcos", expected_upstream=0, expected_arcos=0,
+        "up ^arcos", "arcos ^up", expected_upstream=0, expected_arcos=0,
     )
     assert result.available is True
     assert result.equivalent == {}

@@ -16,6 +16,7 @@ from collections import Counter
 from pathlib import Path
 
 DEFAULT = Path(__file__).resolve().parents[1] / "out" / "upstream-mapping.csv"
+BEHIND = "Upstream Commits Not In ARCoS (raw)"
 
 failures = []
 
@@ -42,14 +43,17 @@ def main(path: Path) -> int:
     )
 
     # The kernel: a fork pinned to 6.1 compared against linux-6.12.y once
-    # reported a backlog of 182,919 commits. The series must follow the release.
+    # reported a backlog of 182,919 commits. The series must follow the release
+    # (the stable branch, or a v6.1.x tag of it).
     kernel = {r["Debian Release"]: r for r in rows if r["Package"] == "linux"}
-    for release, expected in (("bookworm", "linux-6.1.y"), ("trixie", "linux-6.12.y")):
+    for release, expected in (("bookworm", "6.1"), ("trixie", "6.12")):
         row = kernel.get(release)
+        ref = row["Upstream Ref"] if row else ""
         check(
-            f"linux/{release} tracks {expected}",
-            bool(row) and row["Upstream Ref"] == expected,
-            row["Upstream Ref"] if row else "missing",
+            f"linux/{release} tracks the {expected} series",
+            bool(row) and re.search(r"(?<!\d)%s(?!\d)" % re.escape(expected), ref)
+            is not None,
+            ref or "missing",
         )
     if len(kernel) == 2:
         check(
@@ -69,6 +73,34 @@ def main(path: Path) -> int:
 
     unresolved = sorted({r["Package"] for r in rows if r["Status"] == "UNRESOLVED"})
     check("nothing is left UNRESOLVED", not unresolved, ", ".join(unresolved))
+
+    # VERIFIED means proven, not merely reachable.
+    unproven = sorted({
+        f'{r["Package"]}/{r["Debian Release"]}' for r in rows
+        if r["Status"] == "VERIFIED" and r.get("Verification Level") not in
+        ("SHARED_HISTORY", "CONTENT_MATCH_APPROVED")
+    })
+    check("every VERIFIED row proves the relationship (not just REF_EXISTS)",
+          not unproven, ", ".join(unproven))
+    no_code = sorted({
+        f'{r["Package"]}/{r["Debian Release"]}' for r in rows
+        if r["Status"] in ("NEEDS_REVIEW", "FAILED") and not r.get("Review Reasons")
+    })
+    check("every NEEDS_REVIEW/FAILED row carries a review reason code",
+          not no_code, ", ".join(no_code))
+    unlabelled = sorted({
+        f'{r["Package"]}/{r["Debian Release"]}' for r in rows
+        if (r.get(BEHIND) or "").strip() and not (r.get("Counts Basis") or "").strip()
+    })
+    check("every raw commit count says what it counts", not unlabelled,
+          ", ".join(unlabelled))
+    no_shared_count = sorted({
+        f'{r["Package"]}/{r["Debian Release"]}' for r in rows
+        if "NO_SHARED_HISTORY" in (r.get("Review Reasons") or "")
+        and (r.get(BEHIND) or "").strip()
+    })
+    check("no count is invented for a fork with no shared history",
+          not no_shared_count, ", ".join(no_shared_count))
 
     # An upstream nobody contacted is a guess.
     unverified = sorted({
@@ -104,7 +136,7 @@ def main(path: Path) -> int:
           f"{len(proven)} of {len(rows)}")
     bad_counts = [
         f'{r["Package"]}/{r["Debian Release"]}' for r in proven
-        if not (r["Commits Behind"] or "").isdigit()
+        if not (r.get(BEHIND) or "").isdigit()
     ]
     check("every proven row carries a commit-behind count", not bad_counts,
           ", ".join(bad_counts))

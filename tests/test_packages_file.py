@@ -141,3 +141,18 @@ def test_the_container_keeps_config_read_only_and_points_at_out():
     assert "./config:/app/config:ro" in compose["volumes"]
     assert "./out:/app/out" in compose["volumes"]
     assert compose["environment"]["APM_PACKAGES_FILE"] == "/app/out/packages.yaml"
+
+
+def test_the_container_never_sees_host_paths_for_keys():
+    """.env names host paths; inside the container the key is where compose
+    mounted it. Passing the host path through left ssh pointing at nothing."""
+    compose = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / "docker-compose.yml").read_text()
+    )["services"]["backend"]
+    env = compose["environment"]
+    assert env["APM_GIT_SSH_IDENTITY_FILE"] == "${APM_GIT_SSH_KEY_FILE:+/home/apm/.ssh/id_git}"
+    assert env["APM_SSH_IDENTITY_FILE"] == "${APM_SSH_IDENTITY_FILE:+/home/apm/.ssh/id_bridge}"
+    assert env["APM_APPROVALS_FILE"] == "/app/out/approvals.yaml"
+    mounts = compose["volumes"]
+    assert "${APM_GIT_SSH_KEY_FILE:-/dev/null}:/home/apm/.ssh/id_git:ro" in mounts
+    assert all(m.endswith(":ro") for m in mounts if ".ssh" in m)
