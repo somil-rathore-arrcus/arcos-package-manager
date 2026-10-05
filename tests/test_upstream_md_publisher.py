@@ -745,7 +745,12 @@ def test_the_real_bookworm_plan_only_proposes_proven_packages(tmp_path):
     copy.write_text(json.dumps(plan))
     os.symlink(REAL_OUT / "upstream-md", tmp_path / "upstream-md")
 
-    mapping = MappingStore(REAL_OUT / "upstream-mapping.csv")
+    from apm.services.comparison_store import ComparisonStore
+
+    # Wired as the container wires it: the rendered file includes the backlog
+    # from any comparison snapshot that matches the mapping's commits.
+    mapping = MappingStore(REAL_OUT / "upstream-mapping.csv",
+                           comparisons=ComparisonStore(REAL_OUT / "comparisons"))
     targets, settled = load_targets(
         copy, mapping, UpstreamMdService(),
         load_settings().upstream_md_publish["exclude"],
