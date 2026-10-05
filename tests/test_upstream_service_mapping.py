@@ -155,3 +155,29 @@ def test_a_branch_that_does_not_exist_is_reported_not_guessed():
     with pytest.raises(UpstreamServiceError) as excinfo:
         service.resolve("pyrad", "bookworm", arcos_branch="ghost")
     assert excinfo.value.code is ErrorCode.BRANCH_NOT_FOUND
+
+
+def test_a_live_resolution_gets_its_comparison_snapshot_too():
+    """A refresh must not drop the backlog the mapping's row would carry."""
+    from apm.domain.models import ComparisonSnapshot
+
+    snapshot = ComparisonSnapshot(arcos_commit="a" * 40, upstream_repository="u",
+                                  upstream_ref="master", upstream_commit="b" * 40,
+                                  relevant_upstream=7)
+
+    class Store:
+        def for_resolution(self, resolution):
+            return snapshot
+
+    class Live:
+        calls = 0
+
+        def resolve_one(self, package, release):
+            Live.calls += 1
+            raise AssertionError("not reached")
+
+    mapping = FakeMapping({("pyrad", "bookworm"): RESOLUTION})
+    mapping.comparisons = Store()
+    service = UpstreamService(ExplodingResolver(), FakeCatalog([PACKAGE]),
+                              FakeVerifier(), FakeSettings(), mapping=mapping)
+    assert service.resolve("pyrad", "bookworm").comparison.relevant_upstream == 7

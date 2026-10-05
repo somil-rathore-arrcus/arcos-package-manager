@@ -95,6 +95,13 @@ class UpstreamService:
         if arcos_branch and arcos_branch != resolution.arcos_branch:
             resolution = self._retarget(resolution, arcos_branch)
 
+        # A live resolution gets the snapshot of a comparison over exactly its
+        # commits, as a mapped one does; otherwise a refresh would quietly drop
+        # the backlog from what the dashboard renders.
+        store = getattr(self.mapping, "comparisons", None)
+        if store is not None and resolution.comparison is None:
+            resolution.comparison = store.for_resolution(resolution)
+
         self._cache[key] = (time.time(), resolution)
         return resolution
 

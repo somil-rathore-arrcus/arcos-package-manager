@@ -399,3 +399,32 @@ def test_the_presence_counts_partition_the_relevant_commits(world):
                                    + s.missing + s.unknown_presence
                                    + s.reverted_upstream)
     assert "git apply --check" in s.backport_detection
+
+
+def test_a_manual_comparison_never_replaces_the_mappings_snapshot(world, tmp_path):
+    """Snapshots are per pair of commits: comparing against another upstream
+    must not make the mapping's backlog disappear from upstream.md."""
+    fx.commit(world["up"], "lib.c", _edit(BASE_FILE, "line 1\n", "l1\n"), "one")
+    other = fx.clone(world["up"], tmp_path / "other-upstream")
+    fx.commit(other, "lib.c", _edit(BASE_FILE, "line 2\n", "l2\n"), "elsewhere")
+    store = ComparisonStore(tmp_path / "comparisons")
+    service = _service(world["root"], store=store)
+
+    mapped = service.compare(_resolution(world))
+    service.compare(_resolution(world, upstream_repository=Repository(url=str(other))))
+
+    resolution = _resolution(world, arcos_commit=mapped.arcos_commit,
+                             upstream_commit=mapped.upstream_commit)
+    snapshot = store.for_resolution(resolution)
+    assert snapshot is not None and snapshot.upstream_commit == mapped.upstream_commit
+
+
+def test_a_legacy_snapshot_file_is_still_read(world, tmp_path):
+    store = ComparisonStore(tmp_path / "comparisons")
+    result = _service(world["root"]).compare(_resolution(world))
+    legacy = tmp_path / "comparisons" / "bookworm" / "demo.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(result.snapshot().model_dump_json())
+    resolution = _resolution(world, arcos_commit=result.arcos_commit,
+                             upstream_commit=result.upstream_commit)
+    assert store.for_resolution(resolution) is not None

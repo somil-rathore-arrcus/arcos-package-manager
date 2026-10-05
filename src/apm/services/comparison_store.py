@@ -12,6 +12,7 @@ or a pull request.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -25,16 +26,28 @@ log = logging.getLogger(__name__)
 
 
 class ComparisonStore:
+    """One snapshot per exact pair of commits, so comparing a package against
+    a manual upstream or another branch never replaces the snapshot of the
+    mapping's own pair."""
+
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
 
-    def _path(self, package: str, release: str) -> Path:
+    def _legacy(self, package: str, release: str) -> Path:
         return self.root / release / f"{package}.json"
+
+    def _path(self, package: str, release: str, arcos: str, repository: str,
+              ref: str, upstream: str) -> Path:
+        key = hashlib.sha256(
+            "|".join((arcos, repository, ref, upstream)).encode()).hexdigest()[:20]
+        return self.root / release / package / f"{key}.json"
 
     def save(self, result: ComparisonResult) -> Optional[Path]:
         if not (result.arcos_commit and result.upstream_commit):
             return None
-        path = self._path(result.package, result.debian_release)
+        path = self._path(result.package, result.debian_release,
+                          result.arcos_commit, result.upstream_repository,
+                          result.upstream_ref, result.upstream_commit)
         path.parent.mkdir(parents=True, exist_ok=True)
         text = result.snapshot().model_dump_json(indent=1)
         handle, temp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
@@ -51,7 +64,22 @@ class ComparisonStore:
     def for_resolution(self, resolution: UpstreamResolution
                        ) -> Optional[ComparisonSnapshot]:
         """The snapshot for exactly this resolution's commits, or None."""
-        path = self._path(resolution.package, resolution.debian_release)
+        upstream = resolution.upstream_repository.url \
+            if resolution.upstream_repository else None
+        candidates = [self._legacy(resolution.package, resolution.debian_release)]
+        if resolution.arcos_commit and upstream and resolution.upstream_commit:
+            candidates.insert(0, self._path(
+                resolution.package, resolution.debian_release,
+                resolution.arcos_commit, upstream, resolution.upstream_ref or "",
+                resolution.upstream_commit))
+        for path in candidates:
+            snapshot = self._matching(path, resolution, upstream)
+            if snapshot is not None:
+                return snapshot
+        return None
+
+    def _matching(self, path: Path, resolution: UpstreamResolution,
+                  upstream: Optional[str]) -> Optional[ComparisonSnapshot]:
         if not path.exists():
             return None
         try:
@@ -59,8 +87,6 @@ class ComparisonStore:
         except (ValueError, OSError) as exc:
             log.warning("unreadable comparison snapshot %s: %s", path, exc)
             return None
-        upstream = resolution.upstream_repository.url \
-            if resolution.upstream_repository else None
         if not (_same(snapshot.arcos_commit, resolution.arcos_commit)
                 and _same(snapshot.upstream_commit, resolution.upstream_commit)
                 and snapshot.upstream_repository == upstream
