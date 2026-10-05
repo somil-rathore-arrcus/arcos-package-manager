@@ -176,6 +176,8 @@ class Container:
             "read_private_repositories": (
                 self.environment.git_backend != "local"
                 or self.environment.ssh.configured
+                # Container-local git with the host's mounted key.
+                or bool(self.environment.git_ssh_identity_file)
             ),
             "create_pull_requests": self.github.can_create_pull_requests,
             "git": self.transports.describe(),

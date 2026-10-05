@@ -118,6 +118,13 @@ def run_doctor(repositories=(), release: str = "bookworm",
     if not env.github_token:
         _report("WARN", "APM_GITHUB_TOKEN is not set",
                 "read-only: dry runs work, pull requests cannot be opened")
+        try:
+            response = github._request("GET", "/rate_limit")
+            _report("PASS" if response.status_code == 200 else "FAIL",
+                    f"GitHub API reachable at {env.github_api_url} (unauthenticated)",
+                    f"HTTP {response.status_code}")
+        except GitHubError as exc:
+            _report("FAIL", f"GitHub API reachable at {env.github_api_url}", str(exc))
     else:
         _report("PASS", "APM_GITHUB_TOKEN is set", "value not shown")
         try:
