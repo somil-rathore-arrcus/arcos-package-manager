@@ -390,3 +390,40 @@ def test_no_metadata_but_a_packaging_fork_is_verified_through_its_release_branch
     assert ReviewReason.NO_CANDIDATE.value not in res.review_reasons
     sid = next(c for c in res.candidates if c.ref == "debian/sid")
     assert sid.accepted is False
+
+
+def test_a_fork_of_another_series_is_found_by_widening_the_search(
+        world, tmp_path, monkeypatch):
+    """Debian ships 1.2.0, but ARCoS imported 2.0.0 (as ARCoS's babeltrace is
+    2.x while Debian's babeltrace is 1.5): no tag of the 1.x line matches, so
+    every release tag is compared and 2.0.0 is proposed."""
+    up = world.upstream
+    fx.git(up, "checkout", "-q", "-b", "two", "v1.3.0")
+    for name in ("A.c", "B.c", "C.c", "D.c"):
+        (up / name).write_text(f"/* rewritten for 2.0 */ int {name[0].lower()}2;\n")
+    fx.git(up, "commit", "-q", "-am", "2.0 rewrite")
+    fx.git(up, "tag", "-a", "v2.0.0", "-m", "2.0.0")
+    fx.git(up, "checkout", "-q", "main")
+    imported = fx.init(tmp_path / "imported20")
+    for name in ("A.c", "B.c", "C.c", "D.c"):
+        (imported / name).write_text(fx.git(up, "show", f"v2.0.0:{name}") + "\n")
+    fx.git(imported, "add", ".")
+    fx.git(imported, "commit", "-q", "-m", "import 2.0.0")
+
+    res, _ = resolve(world, tmp_path, monkeypatch, overrides=curated(world),
+                     arcos=imported, vcs=False)
+    assert res.content_match.base_tag == "v2.0.0"
+    assert res.content_match.score == 1.0
+    assert any("release tags were compared" in n for n in res.content_match.notes)
+    assert ReviewReason.CONTENT_MATCH_UNAPPROVED.value in res.review_reasons
+
+
+def test_a_weak_content_match_is_not_proposed(world, tmp_path, monkeypatch):
+    unrelated = fx.init(tmp_path / "unrelated")
+    for i in range(8):
+        fx.commit(unrelated, f"f{i}.py", f"x = {i}\n", f"file {i}")
+    res, _ = resolve(world, tmp_path, monkeypatch, overrides=curated(world),
+                     arcos=unrelated, vcs=False)
+    assert ReviewReason.NO_SHARED_HISTORY.value in res.review_reasons
+    assert ReviewReason.CONTENT_MATCH_UNAPPROVED.value not in res.review_reasons
+    assert any("No upstream release matches" in n for n in res.notes)

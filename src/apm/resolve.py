@@ -611,6 +611,16 @@ class Resolver:
                 f"{match.base_tag} ({match.files_differing} of "
                 f"{match.files_compared} files differ, score {match.score:.3f})"
             )
+        weak = match.base_tag and (match.score or 0) < getattr(
+            self.content_base, "threshold", 0.6)
+        if weak and not match.approved:
+            resolution.note(
+                f"No upstream release matches the ARCoS tree by content (the "
+                f"closest, {match.base_tag}, scores {match.score:.3f}). The fork "
+                f"may be of another project or series than the curated mapping "
+                f"names."
+            )
+            return
         if not match.approved:
             if match.base_tag:
                 resolution.flag(

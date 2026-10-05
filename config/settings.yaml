@@ -125,6 +125,8 @@ plausibility:
 content_base:
   enabled: true
   max_tags: 150
+  # Below this tree-similarity score no release is proposed as the base.
+  min_score: 0.6
 
 comparison:
   # Upstream commits checked with git apply / line comparison per comparison;

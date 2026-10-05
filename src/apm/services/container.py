@@ -73,6 +73,7 @@ def build_resolver(environment: Environment, settings, transports,
         content = ContentBaseService(
             workspaces, http_cache=http_cache, archive=settings.archive,
             max_tags=int(content_cfg.get("max_tags", 150)),
+            min_score=float(content_cfg.get("min_score", 0.6)),
         )
     return Resolver(
         settings, load_overrides() if overrides is None else overrides,

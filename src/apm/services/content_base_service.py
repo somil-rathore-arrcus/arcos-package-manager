@@ -41,13 +41,16 @@ _NUMBER = re.compile(r"(\d+)")
 class ContentBaseService:
     def __init__(self, workspaces, http_cache=None, archive: Optional[dict] = None,
                  max_tags: int = 150, top: int = 3,
-                 max_orig_bytes: int = 200 * 1024 * 1024) -> None:
+                 max_orig_bytes: int = 200 * 1024 * 1024,
+                 min_score: float = 0.6) -> None:
         self.workspaces = workspaces
         self.http_cache = http_cache
         self.archive = archive or {}
         self.max_tags = max_tags
         self.top = top
         self.max_orig_bytes = max_orig_bytes
+        # Below this a "closest" tag is not a match, and is not proposed.
+        self.min_score = min_score
 
     # -- choosing what to compare -----------------------------------------
 
@@ -103,23 +106,27 @@ class ContentBaseService:
         if arcos_head not in roots:
             trees.append((arcos_head, "ARCoS commit"))
 
-        local = {tag: f"refs/apm/content/{i}" for i, tag in enumerate(chosen)}
         workspace.set_remote("upstream", upstream_url)
-        specs = " ".join(
-            shlex.quote(f"+refs/tags/{tag}:{ref}") for tag, ref in local.items()
-        )
-        fetched = workspace.shell(
-            f"git fetch -q --no-tags --filter=blob:none upstream {specs}",
-            timeout=workspace.long_timeout,
-        )
-        if not fetched.ok:
-            raise GitWorkspaceError(
-                f"could not fetch {len(chosen)} release tags from {upstream_url}",
-                fetched.stderr.strip(),
-            )
-
+        local = {tag: f"refs/apm/content/{i}" for i, tag in enumerate(chosen)}
+        self._fetch_tags(workspace, upstream_url, local)
         candidates = self._score(workspace, trees, local)
         candidates.sort(key=lambda c: (-c.score, c.files_differing, c.tag))
+
+        if upstream_version and (not candidates or candidates[0].score < self.min_score):
+            # Nothing in Debian's series matches. The fork may simply be of a
+            # different series than Debian ships (ARCoS's babeltrace is 2.x
+            # while Debian's babeltrace is 1.5), so every release tag is tried.
+            wider = [t for t in self.pick_tags(tags, "", names) if t not in local]
+            if wider:
+                extra = {tag: f"refs/apm/content/w{i}" for i, tag in enumerate(wider)}
+                self._fetch_tags(workspace, upstream_url, extra)
+                local.update(extra)
+                candidates += self._score(workspace, trees, extra)
+                candidates.sort(key=lambda c: (-c.score, c.files_differing, c.tag))
+                match.notes.append(
+                    f"no tag of Debian's {upstream_version} series matched; all "
+                    f"{len(local)} release tags were compared"
+                )
         for candidate in candidates[: self.top]:
             self._line_counts(workspace, candidate, local[candidate.tag])
 
@@ -133,7 +140,11 @@ class ContentBaseService:
         exact = [c for c in candidates[:3] if upstream_version and any(
             canonical(v) == canonical(upstream_version)
             for v in tag_versions(c.tag, names))]
-        if exact and exact[0].score >= best.score - 1e-9:
+        # Debian's own version wins a tie - but only a real tie: an older tag
+        # whose files are a subset of the tree also scores 1.0, and the files
+        # only ARCoS has are what tell the two apart.
+        if exact and exact[0].score >= best.score - 1e-9 \
+                and exact[0].files_differing <= best.files_differing:
             best = exact[0]
         match.base_tag, match.base_sha = best.tag, tags.get(best.tag)
         match.arcos_tree = best.arcos_tree
@@ -148,6 +159,11 @@ class ContentBaseService:
             match.notes.append(
                 f"ambiguous: {candidates[1].tag} scores within 0.5% of {best.tag}"
             )
+        if best.score < self.min_score:
+            match.notes.append(
+                f"weak: the closest tag {best.tag} scores {best.score:.3f}, below "
+                f"{self.min_score}; no release is proposed as the base"
+            )
         if orig is not None:
             match.notes.append(
                 f"Debian orig tarball: {orig.files_differing} of "
@@ -158,6 +174,24 @@ class ContentBaseService:
             self._apply_approval(workspace, match, approved, tags, upstream_url,
                                  arcos_head, target_refs)
         return match
+
+    def _fetch_tags(self, workspace, upstream_url: str, local: Dict[str, str]) -> None:
+        specs = " ".join(
+            shlex.quote(f"+refs/tags/{tag}:{ref}") for tag, ref in local.items()
+        )
+        fetched = workspace.shell(
+            f"git fetch -q --no-tags --filter=blob:none upstream {specs}",
+            timeout=workspace.long_timeout,
+        )
+        if not fetched.ok:
+            raise GitWorkspaceError(
+                f"could not fetch {len(local)} release tags from {upstream_url}",
+                fetched.stderr.strip(),
+            )
+
+    @property
+    def threshold(self) -> float:
+        return self.min_score
 
     def _score(self, workspace, trees, local: Dict[str, str]
                ) -> List[ContentMatchCandidate]:
