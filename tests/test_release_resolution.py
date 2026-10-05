@@ -183,6 +183,9 @@ def test_a_content_match_is_proposed_but_not_used_until_approved(
     match = res.content_match
     assert match.base_tag == "v1.2.0"
     assert match.score == 1.0 and match.files_differing == 0
+    assert match.files_compared == 2, "the tag's files are counted, not assumed"
+    other = next(c for c in match.candidates if c.tag == "v1.3.0")
+    assert 0 < other.score < 1 and other.files_differing == 2
     assert match.arcos_tree_label == "root import commit"
     assert match.approved is False
     assert ReviewReason.CONTENT_MATCH_UNAPPROVED.value in res.review_reasons

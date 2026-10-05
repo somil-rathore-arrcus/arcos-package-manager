@@ -36,17 +36,20 @@ def main(path: Path) -> int:
     check("every row has an ARCoS commit", all(r["ARCoS Commit"] for r in rows))
     check("every row has an ARCoS link", all(r["ARCoS Link"] for r in rows))
 
-    check(
-        "bookworm has more packages than trixie (eight are bookworm-only)",
-        by_release.get("bookworm", 0) > by_release.get("trixie", 0),
-        str(dict(by_release)),
-    )
+    if by_release.get("trixie"):
+        check(
+            "bookworm has more packages than trixie (eight are bookworm-only)",
+            by_release.get("bookworm", 0) > by_release.get("trixie", 0),
+            str(dict(by_release)),
+        )
 
     # The kernel: a fork pinned to 6.1 compared against linux-6.12.y once
     # reported a backlog of 182,919 commits. The series must follow the release
     # (the stable branch, or a v6.1.x tag of it).
     kernel = {r["Debian Release"]: r for r in rows if r["Package"] == "linux"}
     for release, expected in (("bookworm", "6.1"), ("trixie", "6.12")):
+        if not by_release.get(release):
+            continue                      # that release was not resolved here
         row = kernel.get(release)
         ref = row["Upstream Ref"] if row else ""
         check(

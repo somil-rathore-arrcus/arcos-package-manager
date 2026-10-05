@@ -147,7 +147,11 @@ def to_row(resolution: Resolution) -> dict:
         "Reason": resolution.reason,
         "ARCoS Link": links.arcos_commit_web(
             resolution.github_repository, resolution.arcos_commit
-        ) or links.arcos_web(resolution.github_repository, resolution.arcos_branch) or "",
+        ) or links.arcos_web(resolution.github_repository, resolution.arcos_branch)
+        # A fork hosted outside GitHub links to its own repository URL.
+        or (resolution.arcos_repository
+            if resolution.arcos_repository.startswith(("http://", "https://"))
+            else ""),
         "Debian Link": links.debian_source_web(
             resolution.release, debian.package if debian else None
         ) or "",

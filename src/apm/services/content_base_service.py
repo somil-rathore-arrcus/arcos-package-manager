@@ -163,10 +163,14 @@ class ContentBaseService:
                ) -> List[ContentMatchCandidate]:
         """One shell call: for each tree and tag, how many files differ."""
         excludes = " ".join(shlex.quote(f":(exclude){e}") for e in EXCLUDES)
+        # ls-tree takes literal paths only - no :(exclude) magic - so the
+        # excluded top-level entries are filtered out of its listing instead.
+        skip = "|".join(re.escape(e) for e in EXCLUDES)
         lines = []
         for tag, ref in local.items():
             lines.append(
-                f"T=$(git ls-tree -r --name-only {ref} -- . {excludes} | wc -l)"
+                f"T=$(git ls-tree -r --name-only {ref} | "
+                f"grep -cvE {shlex.quote(f'^({skip})(/|$)')})"
             )
             for sha, _label in trees:
                 lines.append(
