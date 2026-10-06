@@ -1,9 +1,31 @@
-.venv/
-frontend/node_modules/
-frontend/dist/
-out/
-.git/
-.pytest_cache/
-__pycache__/
-*.pyc
+# Only what the image build needs. Never secrets, keys, runtime state or
+# local environments.
+
+# Version control and local environments
+.git
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+frontend/node_modules
+frontend/dist
+
+# Secrets - the image must never contain them
 .env
+.env.*
+!.env.example
+**/*.pem
+**/*.key
+**/id_rsa*
+**/id_ed25519*
+**/id_ecdsa*
+**/*_token*
+
+# Runtime state - mounted at run time, never baked in
+out
+workspace
+**/*.log
+
+# Not needed in the image
+docs
+README.md

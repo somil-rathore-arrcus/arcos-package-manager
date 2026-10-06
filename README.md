@@ -7,35 +7,152 @@ and — on explicit request — prepares a branch and a pull request pulling the
 React + TypeScript frontend, FastAPI backend, git and Debian archive metadata
 underneath. No database.
 
-## Quick start
+## Docker Deployment (recommended)
 
-```bash
-python3 -m venv .venv
-./.venv/bin/pip install -r requirements-dev.txt
-cp .env.example .env            # then edit: see docs/deployment.md
+Docker Compose is the standard way to run the application. One container holds
+everything - FastAPI/uvicorn, the built React dashboard, git and ssh - and
+serves the dashboard at `/` and the API at `/api` on port **8080**. The target
+machine needs no Python, no Node and no build step of its own.
 
-./scripts/dev-backend.sh        # http://127.0.0.1:8000
-./scripts/dev-frontend.sh       # http://localhost:5173
+```
+Browser ── http://SERVER_IP:8080 ──▶ Docker Compose ──▶ app container
+                                                        ├─ FastAPI + uvicorn + dashboard
+                                                        ├─ ./out           (reports, mapping, state)
+                                                        ├─ workspace dir   (git clones)
+                                                        └─ SSH key, read-only ──▶ GitHub / Arrcus repos
 ```
 
-Or, on a host, as one process with no Docker, Node or root (dashboard and API on
-port 8080 - see docs/deployment.md):
+### Prerequisites
+
+- Docker Engine with the Compose plugin (`docker compose version`)
+- Git, to clone this repository
+- For repository operations: an SSH key on the server that can reach the
+  Arrcus GitHub repositories (`ssh -T git@github.com` answers with a name)
+
+### Setup
 
 ```bash
-scripts/setup-venv.sh && scripts/build-frontend.sh && scripts/server.sh start
+git clone https://github.com/somil-rathore-arrcus/arcos-package-manager.git
+cd arcos-package-manager
+cp .env.example .env
 ```
 
-Or the whole stack in Docker:
+Then edit `.env` (every variable is described in `.env.example`):
+
+| Variable | Set it to |
+|---|---|
+| `APM_UID`, `APM_GID` | `id -u` and `id -g` of the user that owns this checkout and the SSH key |
+| `APM_GIT_SSH_KEY_FILE` | the **host path** of the SSH private key, e.g. `/home/<user>/.ssh/id_ed25519` |
+| `APM_WORKSPACE_HOST_DIR` | a host directory with room for clones (default `./workspace`) |
+| `APM_GITHUB_TOKEN` | leave empty until pull requests are wanted (see below) |
+| `APM_COMMITTER_NAME`, `APM_COMMITTER_EMAIL` | the person accountable for the PRs |
+
+**SSH (git fetch / clone / push).** Nobody pastes or copies a private key
+anywhere: `.env` only names the key's path on the host, and Compose mounts that
+file **read-only** into the container. It is never copied into the image. The
+key must be readable by `APM_UID` and must not need a passphrase. GitHub's SSH
+host keys are built into the image (taken from GitHub's API over HTTPS), so
+`github.com` is verified without extra setup; `APM_SSH_KNOWN_HOSTS_FILE` can
+mount your own `known_hosts` as well.
+
+**GitHub token (pull requests only).** The SSH key pushes branches; the token
+only calls the GitHub REST API to open and look up pull requests. Without it
+everything else works - mapping, comparison, `upstream.md` generation, dry
+runs - and the dashboard says it is read-only. The token lives only in `.env`
+on the server: it is not in the image, not in git and never printed. A
+fine-grained token needs **Pull requests: Read and write** and **Metadata:
+Read** on the package repositories.
+
+### Start
 
 ```bash
-docker compose up -d --build    # http://localhost:8080
+docker compose build
+docker compose up -d
 ```
 
-The mapping pipeline also runs standalone:
+### Check
 
 ```bash
-PYTHONPATH=src ./.venv/bin/python -m apm discover   # -> config/packages.yaml
-PYTHONPATH=src ./.venv/bin/python -m apm resolve    # -> out/upstream-mapping.{csv,xlsx}
+docker compose ps                       # STATUS shows "healthy"
+curl -s http://localhost:8080/health    # {"status":"ok",...}
+docker compose exec app apm doctor --repo Arrcus/mstpd   # storage, git and GitHub checks
+docker compose logs -f
+```
+
+### Access
+
+```
+http://SERVER_IP:8080/
+```
+
+### Stop
+
+```bash
+docker compose down        # stops and removes the container; out/ and the workspace stay
+```
+
+### Rebuild
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+### Updating
+
+```bash
+git pull --ff-only
+docker compose up -d --build
+```
+
+### Running the CLI
+
+Every `apm` command runs inside the container, against the same data:
+
+```bash
+docker compose exec app apm resolve-release --release bookworm
+docker compose exec app apm generate-upstream-md --release bookworm --branch aminor
+docker compose exec app apm publish-upstream-md --release bookworm --package mstpd   # dry run
+```
+
+### Where data lives
+
+| What | Host | Container |
+|---|---|---|
+| Mapping, reports, `upstream.md` files, PR plans and ledgers, comparison snapshots, approvals, runtime `packages.yaml` | `./out` (`APM_OUT_HOST_DIR`) | `/app/out` |
+| Git clones and probe workdirs | `./workspace` (`APM_WORKSPACE_HOST_DIR`) | `/var/tmp/arcos-package-manager` |
+| Debian/OSV downloads, ancestry cache | Docker volume `apm-cache` (`APM_CACHE_HOST_DIR`) | `/var/cache/arcos-package-manager` |
+| Shipped configuration | `./config`, read-only | `/app/config` |
+
+The container's own filesystem is read-only; it runs as an unprivileged user
+with no Linux capabilities, and nothing above is lost when it is rebuilt or
+recreated. It restarts with the Docker daemon after a reboot.
+
+## Development (without Docker)
+
+For working on the code, or as a fallback on a host where Docker is not
+available:
+
+```bash
+scripts/setup-venv.sh --dev      # .venv with the dependencies (no root needed)
+scripts/build-frontend.sh        # dashboard -> frontend/dist (npm, or Docker's node stage)
+scripts/server.sh start          # dashboard + API on 0.0.0.0:8080 (status|logs|stop|restart)
+scripts/apm doctor               # the CLI
+```
+
+Or with live reload:
+
+```bash
+./scripts/dev-backend.sh        # API on http://127.0.0.1:8000
+./scripts/dev-frontend.sh       # dashboard on http://localhost:5173, proxying /api
+```
+
+The mapping pipeline also runs standalone (in the container: `docker compose
+exec app apm ...`):
+
+```bash
+scripts/apm discover        # -> out/packages.yaml
+scripts/apm resolve         # -> out/upstream-mapping.{csv,xlsx}
 ```
 
 For one release end to end - discovery, resolution, workbook and the
@@ -43,11 +160,10 @@ For one release end to end - discovery, resolution, workbook and the
 [docs/bookworm-aminor-workflow.md](docs/bookworm-aminor-workflow.md):
 
 ```bash
-PYTHONPATH=src ./.venv/bin/python -m apm.resolve_bookworm
+scripts/apm resolve-release --release bookworm
 #   -> out/upstream-mapping-bookworm.{csv,xlsx}
 
-PYTHONPATH=src ./.venv/bin/python -m apm.generate_upstream_md \
-    --release bookworm --branch aminor
+scripts/apm generate-upstream-md --release bookworm --branch aminor
 #   -> out/upstream-md/<package>/debian/upstream.md
 #   -> out/upstream-md-plan-bookworm.{json,md}
 ```
@@ -59,9 +175,8 @@ Proposing the reviewed files is a separate, explicit step - a dry run unless
 `--apply` is given:
 
 ```bash
-PYTHONPATH=src ./.venv/bin/python -m apm publish-upstream-md --package mstpd
-PYTHONPATH=src ./.venv/bin/python -m apm publish-upstream-md --package mstpd \
-    --apply --confirm mstpd
+scripts/apm publish-upstream-md --package mstpd
+scripts/apm publish-upstream-md --package mstpd --apply --confirm mstpd
 #   -> one branch upstream-metadata/bookworm/<package>, one commit, one PR
 #   -> out/upstream-md-pr-results-bookworm.{json,md}
 ```
@@ -234,6 +349,16 @@ Everything is environment-driven; see `.env.example` and
 | `config/overrides.yaml` | no | Hand-verified mappings. Always wins |
 
 ## Testing
+
+In Docker, against the same base image the application runs on:
+
+```bash
+docker build --target test -t apm-test . && docker run --rm apm-test     # backend
+docker build --target frontend-build -t apm-frontend-build . \
+  && docker run --rm apm-frontend-build npx vitest run                    # frontend
+```
+
+Or in the development venv:
 
 ```bash
 ./scripts/test.sh
