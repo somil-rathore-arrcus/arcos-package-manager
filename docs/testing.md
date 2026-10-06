@@ -6,8 +6,9 @@ The tests run on the same base image the application runs on. From the
 checkout directory:
 
 ```bash
-# Backend: pytest in the image's test stage
-docker build --target test -t apm-test . && docker run --rm apm-test
+# Backend: pytest in the image's test stage, as your own uid so it can read out/
+docker build --target test --build-arg APP_UID=$(id -u) --build-arg APP_GID=$(id -g) -t apm-test .
+docker run --rm apm-test
 
 # Backend, also checking the real generated mapping in out/ (read-only)
 docker run --rm -v "$PWD/out:/app/out:ro" apm-test
