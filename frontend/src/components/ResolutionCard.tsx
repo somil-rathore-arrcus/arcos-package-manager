@@ -297,7 +297,11 @@ export function ResolutionCard({
             <>
               <h3 className="small" style={{ margin: '12px 0 6px' }}>Candidates considered</h3>
               <ul className="evidence">
-                {resolution.candidates.map((c, i) => (
+                {resolution.candidates
+                  // A repository listed with a ref is not repeated without one.
+                  .filter((c) => c.ref || !resolution.candidates.some(
+                    (o) => o !== c && o.ref && o.repository === c.repository))
+                  .map((c, i) => (
                   <li key={i}>
                     <Badge tone={c.accepted ? 'tone-good' : 'tone-neutral'}>
                       {c.accepted ? 'accepted' : 'rejected'}
