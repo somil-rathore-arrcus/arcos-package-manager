@@ -5,6 +5,10 @@
 **Document status:** Draft for mentor review
 **Last updated:** TBD
 
+> **Note:** this is the original design and planning document. For how the
+> tool runs today - Docker deployment, commands, the PR workflow - see
+> [docs/README.md](README.md).
+
 > **Rendering note:** this page uses Mermaid diagrams. In Confluence, paste each
 > diagram body into a *Mermaid Diagram* macro (or a code block with language
 > `mermaid` if the Markdown macro is enabled).
@@ -939,10 +943,13 @@ None of these is required for the internship to be considered complete.
 
 | Document | Contents |
 |---|---|
-| `README.md` | Overview, quick start, API table, safety properties |
-| `docs/architecture.md` | Layers, request paths, where state lives |
-| `docs/upstream-resolution.md` | Candidate chain, ancestry, status and category semantics |
-| `docs/git-comparison.md` | Three sets, backport detection, fetch strategy, cost |
+| `README.md` | Overview, quick start, everyday commands, safety rules |
+| `docs/README.md` | Index of the operating documentation |
+| `docs/architecture.md` | Layers, what runs where, request paths, where state lives |
+| `docs/upstream-resolution.md` | Discovery, candidate chain, ancestry, release refs, status semantics |
+| `docs/git-comparison.md` | The sets, backport detection, fetch strategy, cost |
+| `docs/criticality-and-security.md` | Evidence-based criticality, Debian and OSV evidence |
 | `docs/patch-workflow.md` | Selection, preview, conflicts, cherry-pick, pull request |
-| `docs/deployment.md` | SSH bridge, workspace, Docker, VM deployment, troubleshooting |
-| `docs/bookworm-aminor-workflow.md` | One release end to end |
+| `docs/upstream-md.md`, `docs/upstream-md-publishing.md` | Generating and proposing `debian/upstream.md` |
+| `docs/deployment.md`, `docs/operations.md` | Docker deployment and day-to-day operation |
+| `docs/production-handoff.md` | Production state, the first PR, what happens next |

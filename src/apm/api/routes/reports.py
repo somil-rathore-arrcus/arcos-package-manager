@@ -71,7 +71,7 @@ def download(name: str, app=Depends(container)):
                 "code": "NOT_FOUND",
                 "message": (
                     f"No generated report named '{name}'. Run "
-                    f"`python -m apm.resolve_bookworm` to produce one."
+                    f"`apm resolve-release --release <release>` to produce one."
                 ),
             },
         )

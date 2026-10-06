@@ -39,7 +39,7 @@ def run(release: str = "bookworm", branch: str = "", out_dir: Path = None,
     ]
     if not resolutions:
         print(
-            f"no mapping rows for {release}. Run `python -m apm.resolve_bookworm "
+            f"no mapping rows for {release}. Run `apm resolve-release "
             f"--release {release}` first.",
             file=sys.stderr,
         )

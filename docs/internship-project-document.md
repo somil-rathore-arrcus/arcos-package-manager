@@ -5,6 +5,10 @@
 **Status:** Deployed on the project VM in read-only mode
 **Last updated:** TBD
 
+> **Note:** this is the original design and planning document. For how the
+> tool runs today - Docker deployment, commands, the PR workflow - see
+> [docs/README.md](README.md).
+
 ---
 
 ## End Goal
