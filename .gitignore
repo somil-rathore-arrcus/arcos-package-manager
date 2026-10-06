@@ -2,9 +2,13 @@
 .venv/
 __pycache__/
 *.pyc
-out/
+# Runtime state. The directories are kept (empty) in git so a fresh clone
+# already has them owned by the user, ready to mount into the container.
+out/*
+!out/.gitkeep
 .cache/
 .pytest_cache/
 .env.*
 !.env.example
-workspace/
+workspace/*
+!workspace/.gitkeep

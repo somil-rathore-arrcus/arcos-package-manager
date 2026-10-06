@@ -1,7 +1,7 @@
-"""Running on a host without Docker: one process serves dashboard and API.
+"""One process serves dashboard and API - in the container and outside it.
 
-The deployment host has no Node, no nginx and (by policy) no docker compose,
-so the backend serves the built dashboard itself. These tests hold the
+The backend serves the built dashboard itself (no nginx, no second port): the
+Docker image does, and so does the development fallback, scripts/server.sh. These tests hold the
 properties that matter: the API is never shadowed by the dashboard, client
 routes load the app, nothing outside the build can be read, and the runtime
 scripts put state in out/ and read .env without executing it.
@@ -165,3 +165,18 @@ def test_private_access_is_measured_and_cached():
     assert holder.private_access() is True
     assert holder.private_access() is True
     assert len(calls) == 1, "a polled health check must not run git every time"
+
+
+def test_the_liveness_endpoint_does_no_git_and_needs_no_container(tmp_path, monkeypatch):
+    """The container healthcheck hits /health every 30s; it must not run git or
+    build the service container, which /api/health does."""
+    from apm.api.main import create_app
+
+    class Exploding:
+        def __getattr__(self, name):
+            raise AssertionError("/health must not touch the services")
+
+    app = create_app()
+    app.dependency_overrides[deps.container] = lambda: Exploding()
+    response = TestClient(app).get("/health")
+    assert response.status_code == 200 and response.json()["status"] == "ok"

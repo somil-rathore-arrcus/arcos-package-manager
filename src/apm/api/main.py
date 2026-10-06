@@ -47,6 +47,16 @@ def create_app() -> FastAPI:
                    reports):
         app.include_router(module.router, prefix=API_PREFIX)
 
+    @app.get("/health", tags=["health"])
+    def liveness():
+        """Liveness for container health checks.
+
+        Answers without touching git, GitHub, the mapping or the disk, so a slow
+        remote can never make a working process look unhealthy. /api/health is
+        the detailed report of what this deployment can do.
+        """
+        return {"status": "ok", "version": __version__}
+
     errors.install(app)
     # Last, so every /api route is matched before the dashboard's catch-all.
     _serve_frontend(app)
@@ -56,10 +66,10 @@ def create_app() -> FastAPI:
 def _serve_frontend(app: FastAPI) -> None:
     """Serve the built dashboard from the same process and port as the API.
 
-    For a host without Docker or a separate web server: one uvicorn process
-    serves frontend/dist (or APM_FRONTEND_DIST) at / and the API at /api, so
-    the browser sees one origin, exactly as it does behind nginx. Absent a
-    build, nothing is mounted and the API runs alone.
+    One uvicorn process serves frontend/dist (or APM_FRONTEND_DIST) at / and
+    the API at /api, so the browser sees one origin and no web server or second
+    port is needed - in the Docker image and in the development fallback alike.
+    Absent a build, nothing is mounted and the API runs alone.
     """
     from pathlib import Path
 
