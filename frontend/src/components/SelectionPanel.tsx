@@ -26,6 +26,8 @@ export function SelectionPanel({
   resolving: boolean
 }) {
   const configured = branches.find((b) => b.is_configured)
+  const typed = value.branch.trim()
+  const known = !typed || branches.some((b) => b.name === typed)
 
   return (
     <Card title="Selection">
@@ -69,29 +71,34 @@ export function SelectionPanel({
           htmlFor="branch"
           hint={
             branchError
-              ? branchError
+              ? `${branchError} Type the branch name instead.`
               : loadingBranches
                 ? 'Reading branches from the fork…'
-                : configured
-                  ? `${configured.name} is the branch this release ships`
-                  : 'Discovered from the repository'
+                : !known
+                  ? `"${typed}" is not in the fork's branch list; it is checked against the fork when you resolve.`
+                  : configured
+                    ? `${configured.name} is the branch this release ships. Pick another or type one.`
+                    : 'Pick a branch from the fork, or type one.'
           }
         >
-          <select
+          <input
             id="branch"
+            type="text"
+            list="branch-options"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={loadingBranches ? 'Loading…' : 'branch name'}
             value={value.branch}
-            disabled={!value.pkg || loadingBranches || branches.length === 0}
+            disabled={!value.pkg}
             onChange={(e) => onChange({ branch: e.target.value })}
-          >
-            {branches.length === 0 && <option value="">—</option>}
+          />
+          <datalist id="branch-options">
             {branches.map((b) => (
               <option key={b.name} value={b.name}>
-                {b.name}
-                {b.is_configured ? ' — release default' : ''}
-                {b.is_default && !b.is_configured ? ' — repository default' : ''}
+                {b.is_configured ? 'release default' : b.is_default ? 'repository default' : ''}
               </option>
             ))}
-          </select>
+          </datalist>
         </Field>
 
         <Field label="Upstream resolution" htmlFor="upstream-mode">
@@ -147,7 +154,7 @@ export function SelectionPanel({
           className="primary"
           onClick={onResolve}
           disabled={
-            !value.pkg || resolving ||
+            !value.pkg || resolving || !typed ||
             (value.mode === 'MANUAL' && (!value.manualRepository || !value.manualRef))
           }
         >

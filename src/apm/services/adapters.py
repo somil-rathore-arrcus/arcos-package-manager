@@ -196,7 +196,13 @@ def _candidates(resolution: Resolution) -> list:
     counts - and otherwise a reconstruction from the evidence.
     """
     if resolution.candidates:
-        return list(resolution.candidates) + rejected_candidates(resolution.evidence)
+        probed = {c.repository for c in resolution.candidates}
+        # A repository the probe already measured is not listed a second time
+        # from the evidence text.
+        return list(resolution.candidates) + [
+            c for c in rejected_candidates(resolution.evidence)
+            if c.repository not in probed
+        ]
     candidates = []
     if resolution.upstream and resolution.upstream.repository:
         candidates.append(

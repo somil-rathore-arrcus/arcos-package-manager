@@ -41,23 +41,27 @@ export function DashboardPage() {
     !!selection.pkg && !!selection.release,
   )
 
-  // Default to the branch the release manifest names, never to a fixed name.
+  // Default to the branch the release manifest names, never to a fixed name -
+  // once, when a package's branches load. Not again while the field is being
+  // edited, or clearing it to type another name would refill it.
   useEffect(() => {
-    if (branches.data?.length && !selection.branch) {
+    if (branches.data?.length) {
       const configured = branches.data.find((b) => b.is_configured)
-      setSelection((s) => ({ ...s, branch: configured?.name ?? branches.data![0].name }))
+      setSelection((s) => (s.branch ? s : {
+        ...s, branch: configured?.name ?? branches.data![0].name,
+      }))
     }
-  }, [branches.data, selection.branch])
+  }, [branches.data])
 
   const resolution = useAsyncAction(async () => {
     if (selection.mode === 'MANUAL') {
       return api.verifyManualUpstream({
         package: selection.pkg, release: selection.release,
         repository: selection.manualRepository, ref: selection.manualRef,
-        arcos_branch: selection.branch || undefined,
+        arcos_branch: selection.branch.trim() || undefined,
       })
     }
-    return api.upstream(selection.pkg, selection.release, selection.branch || undefined)
+    return api.upstream(selection.pkg, selection.release, selection.branch.trim() || undefined)
   })
 
   const comparison = useAsyncAction(async () => {
@@ -65,7 +69,7 @@ export function DashboardPage() {
     if (!current) return null
     return api.compare({
       package: selection.pkg, release: selection.release,
-      arcos_branch: selection.branch || undefined,
+      arcos_branch: selection.branch.trim() || undefined,
       upstream_repository:
         current.mode === 'MANUAL' ? current.upstream_repository?.url : undefined,
       upstream_ref: current.mode === 'MANUAL' ? current.upstream_ref ?? undefined : undefined,
@@ -77,7 +81,7 @@ export function DashboardPage() {
     if (!current?.upstream_repository || !current.upstream_ref) return null
     return {
       package: selection.pkg, release: selection.release,
-      arcos_branch: selection.branch,
+      arcos_branch: selection.branch.trim(),
       upstream_repository: current.upstream_repository.url,
       upstream_ref: current.upstream_ref,
       shas: Array.from(selected),
@@ -116,7 +120,7 @@ export function DashboardPage() {
     if (!cherryPick) return null
     const pr = await api.createPullRequest({
       package: selection.pkg, release: selection.release,
-      arcos_branch: selection.branch, head_branch: cherryPick.new_branch,
+      arcos_branch: selection.branch.trim(), head_branch: cherryPick.new_branch,
       applied: cherryPick.applied,
     })
     setPatchPr(pr)
@@ -126,14 +130,14 @@ export function DashboardPage() {
   const upstreamMd = useAsyncAction(async () =>
     api.generateUpstreamMd({
       package: selection.pkg, release: selection.release,
-      arcos_branch: selection.branch || undefined,
+      arcos_branch: selection.branch.trim() || undefined,
     }),
   )
 
   const createMdPr = useAsyncAction(async () => {
     const result = await api.createUpstreamMdPr({
       package: selection.pkg, release: selection.release,
-      arcos_branch: selection.branch || undefined, confirm: true,
+      arcos_branch: selection.branch.trim() || undefined, confirm: true,
     })
     if (!result.pull_request) {
       throw new Error(`${result.status}${result.error ? `: ${result.error}` : ''}`)

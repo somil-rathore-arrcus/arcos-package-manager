@@ -181,3 +181,21 @@ def test_a_live_resolution_gets_its_comparison_snapshot_too():
     service = UpstreamService(ExplodingResolver(), FakeCatalog([PACKAGE]),
                               FakeVerifier(), FakeSettings(), mapping=mapping)
     assert service.resolve("pyrad", "bookworm").comparison.relevant_upstream == 7
+
+
+def test_a_probed_repository_is_not_listed_again_from_the_evidence():
+    from apm.domain.enums import ResolutionMethod as M
+    from apm.domain.models import UpstreamCandidate
+    from apm.models import Category, Confidence, Method, Resolution, Status
+    from apm.services.adapters import to_domain_resolution
+
+    salsa = "https://salsa.debian.org/python-team/packages/pyrad.git"
+    record = Resolution(
+        package="pyrad", release="bookworm", category=Category.DEBIAN_UPSTREAM,
+        status=Status.VERIFIED, method=Method.DEP12, confidence=Confidence.HIGH,
+        evidence=[f"Vcs-Git {salsa} is Debian packaging, not upstream"],
+        candidates=[UpstreamCandidate(repository=salsa, ref="debian/2.1-3",
+                                      source=M.ANCESTRY)],
+    )
+    listed = [c.repository for c in to_domain_resolution(record).candidates]
+    assert listed == [salsa]

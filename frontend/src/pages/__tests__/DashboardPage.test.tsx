@@ -96,7 +96,25 @@ describe('selection', () => {
     await selectPackage()
     const branch = screen.getByLabelText('ARCoS target branch')
     await waitFor(() => expect(branch).toHaveValue('aminor'))
-    expect(within(branch).getByRole('option', { name: /main/ })).toBeInTheDocument()
+    const options = Array.from(document.querySelectorAll('#branch-options option'))
+      .map((o) => (o as HTMLOptionElement).value)
+    expect(options).toEqual(['aminor', 'main'])
+  })
+
+  it('accepts a typed branch and resolves against it', async () => {
+    const recorded = await openDashboard()
+    await selectPackage()
+    const branch = screen.getByLabelText('ARCoS target branch')
+    await waitFor(() => expect(branch).toHaveValue('aminor'))
+    await user.clear(branch)
+    expect(branch).toHaveValue('')
+    expect(screen.getByRole('button', { name: /resolve upstream/i })).toBeDisabled()
+    await user.type(branch, 'aminor-hotfix')
+    expect(screen.getByText(/not in the fork's branch list/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /resolve upstream/i }))
+    await screen.findByText('Resolved upstream')
+    const call = recorded.calls.find((c) => c.path.startsWith('/upstream/pyrad'))!
+    expect(call.path).toContain('arcos_branch=aminor-hotfix')
   })
 
   it('reports when branches cannot be read instead of assuming one', async () => {
