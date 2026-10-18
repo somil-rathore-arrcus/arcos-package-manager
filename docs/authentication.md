@@ -7,7 +7,7 @@ Two credentials, for two different jobs. Neither can stand in for the other.
 | Used for | git: `ls-remote`, fetch, clone, **push** | GitHub REST API: look up a repository, find and **open pull requests** |
 | Code | `src/apm/gitio/transport.py` | `src/apm/services/github_service.py` |
 | Needed for | everything that reads repositories, and pushing branches | only opening (and looking up) pull requests |
-| Without it | private repositories cannot be read; nothing works for the ARCoS forks | read-only: everything works except opening PRs |
+| Without it | private repositories cannot be read; nothing works for the ARCoS forks | no PR is opened by the tool; everything else works, and `--push-only` still pushes branches and gives a link to open each PR |
 | Lives | on the host; `.env` names its path; mounted read-only | in `.env` on the host; passed to the container's environment |
 
 A pull request therefore involves three identities:
@@ -16,7 +16,7 @@ A pull request therefore involves three identities:
 |---|---|---|
 | Commit author/committer | `APM_COMMITTER_NAME`, `APM_COMMITTER_EMAIL` | written into the `debian/upstream.md` commit |
 | Branch pusher | the GitHub account of the SSH key | pushes `upstream-metadata/<release>/<package>` |
-| PR author | the owner of the token | opens the pull request |
+| PR author | the owner of the token - or, with `--push-only`, whoever opens the link | opens the pull request |
 
 ## SSH: git access
 
@@ -62,7 +62,9 @@ PASS  GitHub SSH identity for pushes  -> authenticated as <github-account>
 ```
 
 `doctor` proves read access. Push access is proven at push time; the
-publisher's dry run does not push.
+publisher's dry run does not push. The `GitHub SSH identity for pushes` line
+names the account branches will be pushed as (on the production host,
+`lakshya-arrcus`).
 
 ### Changing the key
 
@@ -141,12 +143,38 @@ permissions; the right to open a PR is proven by the first real PR.
 
 ### Without a token
 
-- `/api/health` reports `"read_only": true`; the dashboard says so and disables
-  the buttons that would push or open a PR.
+- `/api/health` reports `"read_only": true` - meaning the tool cannot open a
+  pull request. The dashboard says so and disables the buttons that would push
+  or open a PR.
 - `apm publish-upstream-md --apply` stops before pushing:
   `APM_GITHUB_TOKEN is not set, so no pull request could be opened. Nothing was pushed.`
+- `apm publish-upstream-md --apply --push-only` pushes the branches anyway,
+  with the SSH key, and gives a link per package to open its pull request
+  (below).
 - Everything else - discovery, resolution, comparison, preview, generation,
   dry runs - works.
+
+### Push-only: SSH push access is enough
+
+`--push-only` (CLI) or `"push_only": true` (API) needs only what a push needs:
+the SSH key, and push access for its GitHub account to each package
+repository. It needs no token and skips the token pre-flight. Without a token
+it makes no GitHub API call at all, and relies on the results ledger to know
+which packages already have a pull request. If a token is set, it is used for
+at most one read per package - the same lookup for an earlier pull request that
+`--apply` makes - so a GitHub outage can still stop a package with `ERROR`
+before its push. The pull request is still opened by a person: GitHub's
+pre-filled form, from the link the tool prints, in a browser.
+
+| Identity | With `--push-only` |
+|---|---|
+| Commit author/committer | `APM_COMMITTER_NAME`, `APM_COMMITTER_EMAIL`, as always |
+| Branch pusher | the SSH key's GitHub account |
+| PR author | whoever opens the link - it must be someone who can open pull requests on that repository |
+
+The link carries no credential; it only fills in the form. Someone without
+access to the repository gets GitHub's 404 page. Details:
+[upstream-md-publishing.md → Push-only mode](upstream-md-publishing.md#push-only-mode-no-token).
 
 ### Rotating or removing it
 

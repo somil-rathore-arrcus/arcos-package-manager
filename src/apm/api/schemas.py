@@ -127,6 +127,14 @@ class UpstreamMdPrRequest(BaseModel):
             "side effect of generating the file."
         ),
     )
+    push_only: bool = Field(
+        False,
+        description=(
+            "Push the branch but open no pull request: the result is "
+            "BRANCH_PUSHED with pr_create_url, GitHub's page to open it from. "
+            "Needs no GitHub token; still needs confirm=true unless dry_run."
+        ),
+    )
 
 
 class HealthResponse(BaseModel):

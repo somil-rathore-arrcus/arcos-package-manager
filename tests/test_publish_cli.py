@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
+import gitfixtures as g
+from apm.domain.models import PullRequest
 from apm.publish_upstream_md import run
 from apm.services.upstream_md_publisher import UpstreamMdPublisher, sha256_text
 from apm.services.upstream_md_service import UpstreamMdService
@@ -82,3 +87,300 @@ def test_apply_opens_the_pr_records_it_and_a_rerun_does_nothing(tmp_path):
 def test_unknown_packages_are_refused(tmp_path):
     _, _, container, out = _setup(tmp_path)
     assert run(out_dir=out, packages_wanted=["nope"], container=container) == 1
+
+
+# -- push only ------------------------------------------------------------------
+
+BRANCH = "upstream-metadata/bookworm/mstpd"
+VERIFY_LEDGER = Path(__file__).resolve().parents[1] / "scripts" / "verify_pr_ledger.py"
+
+
+def _verify_ledger(root):
+    """scripts/verify_pr_ledger.py, pointed at `root`/out instead of the repo."""
+    spec = importlib.util.spec_from_file_location("verify_pr_ledger", VERIFY_LEDGER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.ROOT = root
+    return module.main("bookworm")
+
+
+def test_push_only_without_a_token_pushes_and_writes_the_links(tmp_path, capsys):
+    remote, github, container, out = _setup(tmp_path)
+    github.token = ""
+
+    assert run(out_dir=out, packages_wanted=["mstpd"], apply=True,
+               push_only=True, confirm=["mstpd"], container=container) == 0
+
+    printed = capsys.readouterr().out
+    assert "APPLY (push only) - branches will be pushed; no pull request will " \
+           "be opened" in printed
+    links = out / "upstream-md-pr-links-bookworm.md"
+    assert f"Branches were pushed. No pull request was created. Open each one " \
+           f"with its link in {links}; the person opening it needs access to " \
+           f"the repository." in printed
+    assert remote.branches() == ["aminor", BRANCH]
+    assert github.created == [] and github.lookups == []
+
+    [entry] = json.loads(
+        (out / "upstream-md-pr-results-bookworm.json").read_text())["entries"]
+    assert entry["status"] == "BRANCH_PUSHED" and entry["pushed"] is True
+    assert entry["pull_request"] is None
+    link = entry["pr_create_url"]
+    assert link.startswith(f"https://github.com/Arrcus/mstpd/compare/aminor..."
+                           f"{BRANCH}?quick_pull=1&title=")
+    # The table shows the page; the full, pre-filled link is in the links file.
+    short = f"https://github.com/Arrcus/mstpd/compare/aminor...{BRANCH}?quick_pull=1 |"
+    assert short in printed
+
+    text = links.read_text()
+    assert f"- Link: {link}\n" in text
+    assert f"- Commit: `{entry['commit']}`" in text
+    assert "mstpd: add debian/upstream.md with verified upstream" in text
+    fence = "````markdown\n"
+    body = text[text.index(fence) + len(fence):text.rindex("\n````")]
+    assert body == parse_qs(urlsplit(link).query)["body"][0]
+    assert body.startswith("Problem Description :")
+    content = (out / "upstream-md" / "mstpd" / "debian" / "upstream.md").read_text()
+    assert content in body
+
+    assert _verify_ledger(tmp_path) == 0
+    assert "FAILURES: none" in capsys.readouterr().out
+
+
+def test_plain_apply_without_a_token_still_refuses_and_pushes_nothing(tmp_path,
+                                                                      capsys):
+    remote, github, container, out = _setup(tmp_path)
+    github.token = ""
+
+    assert run(out_dir=out, packages_wanted=["mstpd"], apply=True,
+               confirm=["mstpd"], container=container) == 2
+
+    assert "APM_GITHUB_TOKEN is not set" in capsys.readouterr().err
+    assert remote.branches() == ["aminor"]
+    assert not (out / "upstream-md-pr-links-bookworm.md").exists()
+
+
+def test_push_only_needs_the_same_confirmation(tmp_path):
+    remote, github, container, out = _setup(tmp_path)
+    github.token = ""
+
+    assert run(out_dir=out, packages_wanted=["mstpd"], apply=True, push_only=True,
+               confirm=["zenoh"], container=container) == 2
+    assert run(out_dir=out, packages_wanted=["mstpd"], apply=True, push_only=True,
+               container=container) == 2
+    assert run(out_dir=out, all_packages=True, apply=True, push_only=True,
+               confirm_count=2, container=container) == 2
+    assert remote.branches() == ["aminor"]
+    assert container.publisher.workspaces.pushes == []
+
+
+def test_push_only_dry_run_shows_the_links_and_pushes_nothing(tmp_path, capsys):
+    remote, github, container, out = _setup(tmp_path)
+    github.token = ""
+
+    assert run(out_dir=out, all_packages=True, push_only=True,
+               container=container) == 0
+
+    printed = capsys.readouterr().out
+    assert "DRY RUN (push only)" in printed
+    assert "Nothing was pushed. No pull request was created." in printed
+    assert remote.branches() == ["aminor"]
+    assert not (out / "upstream-md-pr-links-bookworm.md").exists()
+    assert not (out / "upstream-md-pr-results-bookworm.json").exists()
+    dry = (out / "upstream-md-pr-links-dryrun-bookworm.md").read_text()
+    assert "Dry run: nothing was pushed" in dry
+    assert f"compare/aminor...{BRANCH}?quick_pull=1&title=" in dry
+
+
+def test_a_token_run_after_push_only_opens_the_pr_without_pushing(tmp_path):
+    remote, github, container, out = _setup(tmp_path)
+    github.token = ""
+    assert run(out_dir=out, packages_wanted=["mstpd"], apply=True, push_only=True,
+               confirm=["mstpd"], container=container) == 0
+    pushed = remote.ref(BRANCH)
+
+    # Push-only again: nothing more it can do, so the package is kept, not
+    # queued - nothing to confirm, nothing pushed.
+    assert run(out_dir=out, packages_wanted=["mstpd"], apply=True, push_only=True,
+               confirm=["mstpd"], container=container) == 2
+    assert run(out_dir=out, packages_wanted=["mstpd"], apply=True, push_only=True,
+               confirm_count=0, container=container) == 0
+    assert len(container.publisher.workspaces.pushes) == 1
+
+    # A token run still queues it, to open its pull request.
+    github.token = "tok"
+    assert run(out_dir=out, packages_wanted=["mstpd"], apply=True,
+               confirm=["mstpd"], container=container) == 0
+
+    [entry] = json.loads(
+        (out / "upstream-md-pr-results-bookworm.json").read_text())["entries"]
+    assert entry["status"] == "PR_OPENED"
+    assert entry["commit"] == pushed and remote.ref(BRANCH) == pushed
+    assert len(container.publisher.workspaces.pushes) == 1
+    assert len(github.created) == 1
+
+
+def test_a_pushed_branch_is_not_forgotten_when_the_package_stops_being_eligible(
+        tmp_path):
+    remote, github, container, out = _setup(tmp_path)
+    github.token = ""
+    assert run(out_dir=out, packages_wanted=["mstpd"], apply=True, push_only=True,
+               confirm=["mstpd"], container=container) == 0
+
+    # Excluded now: the ledger must still say the branch is ours.
+    assert run(out_dir=out, all_packages=True, apply=True, push_only=True,
+               confirm_count=0, exclude=["mstpd"], container=container) == 0
+
+    ledger = json.loads((out / "upstream-md-pr-results-bookworm.json").read_text())
+    entry = {e["package"]: e for e in ledger["entries"]}["mstpd"]
+    assert entry["status"] == "BRANCH_PUSHED" and entry["commit"] == remote.ref(BRANCH)
+
+
+def test_draft_with_push_only_says_where_the_draft_option_is(tmp_path, capsys):
+    _, github, container, out = _setup(tmp_path)
+    github.token = ""
+    assert run(out_dir=out, all_packages=True, push_only=True, draft=True,
+               container=container) == 0
+    assert '"Create draft pull request"' in capsys.readouterr().out
+
+
+def test_the_dry_run_lists_what_a_reviewer_should_check(tmp_path, capsys):
+    remote, github, container, out = _setup(tmp_path)
+    # A warning is a review flag, not part of the file, so the reviewed file
+    # still matches the plan and the package is still proposed.
+    container.mapping.rows["mstpd"].warnings = ["check the fork's history"]
+
+    assert run(out_dir=out, all_packages=True, container=container) == 0
+
+    printed = capsys.readouterr().out
+    assert "| mstpd | DRY_RUN_OK |" in printed
+    assert "review: MAPPING_WARNINGS - check the fork's history" in printed
+
+
+def _setup_many(tmp_path, names):
+    """A plan of several packages, each with its own local fork."""
+    service = UpstreamMdService()
+    out = tmp_path / "out"
+    rows, entries, remotes = {}, [], {}
+    for name in names:
+        remotes[name] = Remote(tmp_path / f"remote-{name}")
+        rows[name] = _resolution(name, remote=remotes[name])
+        content = service.render(rows[name])
+        md = out / "upstream-md" / name / "debian" / "upstream.md"
+        md.parent.mkdir(parents=True)
+        md.write_text(content)
+        entries.append({"package": name, "status": "VERIFIED",
+                        "arcos_repository": f"Arrcus/{name}",
+                        "base_branch": "aminor", "sha256": sha256_text(content)})
+    (out / "upstream-md-plan-bookworm.json").write_text(json.dumps({
+        "release": "bookworm", "entries": entries, "skipped": [],
+    }))
+    github = FakeGitHub(token="")
+    container = SimpleNamespace(
+        mapping=FakeMapping(rows), upstream_md=service,
+        publisher=UpstreamMdPublisher(FakeWorkspaces(tmp_path / "ws"), github,
+                                      "Somil Rathore", "somil.rathore@arrcus.com"),
+    )
+    return remotes, github, container, out
+
+
+def test_push_only_batches_with_a_limit_move_on_to_new_packages(tmp_path, capsys):
+    remotes, github, container, out = _setup_many(tmp_path, ["aaa", "bbb"])
+
+    for expected in (["aaa"], ["aaa", "bbb"]):
+        assert run(out_dir=out, all_packages=True, limit=1, apply=True,
+                   push_only=True, confirm_count=1, container=container) == 0
+        pushed = [b.rsplit("/", 1)[1] for _, b in
+                  container.publisher.workspaces.pushes]
+        assert pushed == expected
+
+    # Both waiting: nothing left to push, so nothing to count either.
+    assert run(out_dir=out, all_packages=True, apply=True, push_only=True,
+               confirm_count=0, container=container) == 0
+    printed = capsys.readouterr().out
+    assert "pushed, waiting for a PR 2" in printed
+    assert "No branch was pushed by this run, and no pull request was created. " \
+           "2 branch(es) pushed earlier are waiting for a pull request" in printed
+    assert "No branch is waiting" not in printed
+    assert len(container.publisher.workspaces.pushes) == 2
+
+
+def test_the_links_file_keeps_every_branch_still_waiting(tmp_path, capsys):
+    remotes, github, container, out = _setup_many(tmp_path, ["aaa", "bbb"])
+    assert run(out_dir=out, packages_wanted=["aaa"], apply=True, push_only=True,
+               confirm=["aaa"], container=container) == 0
+    assert run(out_dir=out, packages_wanted=["bbb"], apply=True, push_only=True,
+               confirm=["bbb"], container=container) == 0
+
+    links = (out / "upstream-md-pr-links-bookworm.md").read_text()
+    assert "## aaa" in links and "## bbb" in links
+    assert links.count("- Pushed: yes - waiting for a pull request") == 2
+    ledger = json.loads(
+        (out / "upstream-md-pr-results-bookworm.json").read_text())["entries"]
+    for entry in ledger:
+        assert f"- Link: {entry['pr_create_url']}\n" in links
+
+    # A dry run lists them too, marked as pushed, beside nothing new.
+    assert run(out_dir=out, all_packages=True, push_only=True,
+               container=container) == 0
+    dry = (out / "upstream-md-pr-links-dryrun-bookworm.md").read_text()
+    assert "## aaa" in dry and "## bbb" in dry
+    assert "Pushed: no" not in dry.split("\n\n", 2)[2]
+
+    # Once a pull request exists for one, only the other is still listed.
+    github.token = "tok"
+    assert run(out_dir=out, packages_wanted=["aaa"], apply=True,
+               confirm=["aaa"], container=container) == 0
+    github.token = ""
+    assert run(out_dir=out, all_packages=True, apply=True, push_only=True,
+               confirm_count=0, container=container) == 0
+    links = (out / "upstream-md-pr-links-bookworm.md").read_text()
+    assert "## aaa" not in links and "## bbb" in links
+
+
+def test_a_waiting_link_too_long_for_its_description_is_rebuilt(tmp_path):
+    remotes, github, container, out = _setup_many(tmp_path, ["aaa"])
+    assert run(out_dir=out, packages_wanted=["aaa"], apply=True, push_only=True,
+               confirm=["aaa"], container=container) == 0
+    ledger_path = out / "upstream-md-pr-results-bookworm.json"
+    ledger = json.loads(ledger_path.read_text())
+    full = ledger["entries"][0]["pr_create_url"]
+    body = parse_qs(urlsplit(full).query)["body"][0]
+    # As a link written without its body would be stored.
+    ledger["entries"][0]["pr_create_url"] = full.split("&body=")[0]
+    ledger_path.write_text(json.dumps(ledger))
+
+    assert run(out_dir=out, all_packages=True, apply=True, push_only=True,
+               confirm_count=0, container=container) == 0
+    links = (out / "upstream-md-pr-links-bookworm.md").read_text()
+    assert "The description is too long for the link" in links
+    assert f"````markdown\n{body}\n````" in links
+
+
+def test_a_closed_pull_request_is_never_pushed_again_by_push_only(tmp_path):
+    remote, github, container, out = _setup(tmp_path)
+    assert run(out_dir=out, packages_wanted=["mstpd"], apply=True,
+               confirm=["mstpd"], container=container) == 0
+    # A reviewer closes it and deletes the branch; a token run records that.
+    github._open.clear()
+    github.earlier = PullRequest(number=1, state="closed",
+                                 url="https://github.com/Arrcus/mstpd/pull/1")
+    g.git(remote.bare, "update-ref", "-d", f"refs/heads/{BRANCH}")
+    assert run(out_dir=out, packages_wanted=["mstpd"], apply=True, recheck=True,
+               confirm=["mstpd"], container=container) == 0
+    entry = json.loads((out / "upstream-md-pr-results-bookworm.json")
+                       .read_text())["entries"][0]
+    assert entry["status"] == "PR_CLOSED"
+
+    # Without a token push-only could not see the closed PR - the ledger can.
+    github.token = ""
+    for recheck in (False, True):
+        count = 1 if recheck else 0
+        assert run(out_dir=out, packages_wanted=["mstpd"], apply=True,
+                   push_only=True, recheck=recheck, confirm_count=count,
+                   container=container) == 0
+    assert remote.branches() == ["aminor"]
+    assert len(container.publisher.workspaces.pushes) == 1
+    entry = json.loads((out / "upstream-md-pr-results-bookworm.json")
+                       .read_text())["entries"][0]
+    assert entry["status"] == "PR_CLOSED"

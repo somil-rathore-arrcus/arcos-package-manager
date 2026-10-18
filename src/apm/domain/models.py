@@ -706,6 +706,12 @@ class PublishResult(BaseModel):
     pushed: bool = False
     title: str = ""
     pull_request: Optional[PullRequest] = None
+    pr_create_url: Optional[str] = Field(
+        None,
+        description="GitHub's pre-filled 'open a pull request' page for this "
+                    "branch. Set by push-only runs and their dry runs, which "
+                    "open no pull request themselves.",
+    )
     error: Optional[str] = None
     diff: Optional[str] = None
     updated_at: Optional[datetime] = None

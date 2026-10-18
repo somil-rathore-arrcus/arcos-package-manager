@@ -204,9 +204,15 @@ class PublishStatus(str, Enum):
     Anything that stops for a human - a hand-written file, a branch someone else
     owns, a closed PR, a file that no longer matches the plan - is its own
     status, so a batch summary says what needs looking at rather than "failed".
+
+    BRANCH_PUSHED is a push-only run's success: the branch is on the fork and a
+    link to open the pull request was generated, but no pull request exists. It
+    is not done - a later run with a token resumes it and opens the PR without
+    pushing again - and it is not a failure, so it is never retried as one.
     """
 
     DRY_RUN_OK = "DRY_RUN_OK"
+    BRANCH_PUSHED = "BRANCH_PUSHED"
     PR_OPENED = "PR_OPENED"
     PR_EXISTS = "PR_EXISTS"
     PR_MERGED = "PR_MERGED"

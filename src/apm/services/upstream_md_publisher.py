@@ -10,10 +10,20 @@ not merely avoided but unreachable:
   force               there is no force option anywhere in this path
   other files         the commit is the base tree plus one index entry, and
                       the changed-path list is checked to be exactly that entry
-  hand-written files  an existing file without our marker is a CONFLICT and
-                      stops the package
+  hand-written files  an existing file that is neither one this tool wrote
+                      (an older version's marker, or the two-field format)
+                      is a CONFLICT and stops the package
   unverified mappings only VERIFIED packages get past eligibility
   merging             there is no call that merges anything
+  push-only           a push-only run stops at the pushed branch and hands
+                      back the link a person opens the pull request from. It
+                      never opens a pull request and needs no token. Only
+                      without a token does it make no API call at all; with
+                      one set it makes at most one read per package - the
+                      lookup for an earlier pull request an apply makes - and
+                      leaves a merged, closed or open one alone. A package
+                      the ledger records with a pull request, including one
+                      a reviewer closed, is never pushed by it
 
 Every package ends in a PublishResult, recorded before the next one starts; a
 failure in one package is written down and the batch moves on.
@@ -37,7 +47,9 @@ from ..domain.enums import (
     ErrorCode, PublishStatus, ResolutionStatus, UpstreamMdOutcome,
 )
 from ..domain.models import PublishResult, UpstreamResolution
-from .github_service import GitHubError, build_upstream_md_pr_body
+from .github_service import (
+    GitHubError, build_upstream_md_pr_body, pull_request_link,
+)
 from .upstream_md_service import UPSTREAM_MD_PATH, classify
 
 log = logging.getLogger(__name__)
@@ -54,6 +66,14 @@ _STATUS_SKIP = {
     ResolutionStatus.NO_UPSTREAM: PublishStatus.SKIPPED_NO_UPSTREAM,
     ResolutionStatus.NEEDS_REVIEW: PublishStatus.SKIPPED_NEEDS_REVIEW,
 }
+
+# Records of a branch that waits for a person rather than for the next run:
+# pushed by a push-only run, or found by _pushed_file_problem holding a file
+# other than the reviewed one (only that check writes a DRIFT record with the
+# branch's commit). The plan can be regenerated while such a branch waits, so
+# resuming it - or any branch, in a push-only run - first re-reads the pushed
+# file. Resuming any other record behaves as it always has.
+_WAITING_RECORDS = (PublishStatus.BRANCH_PUSHED, PublishStatus.DRIFT)
 
 
 class PublishError(RuntimeError):
@@ -246,6 +266,20 @@ def load_targets(plan_path: Path, mapping, renderer,
     return targets, settled
 
 
+def pull_request_body(target: PublishTarget, result: PublishResult) -> str:
+    """The description of this package's pull request.
+
+    One function for the API call and the push-only link alike, so a pull
+    request opened from the link says exactly what one the tool opened would.
+    """
+    if target.resolution is None:
+        return result.title
+    return build_upstream_md_pr_body(
+        target.resolution, result.base_sha, content=target.content,
+        outcome=result.outcome,
+    )
+
+
 def target_from_resolution(resolution: UpstreamResolution,
                            content: str) -> PublishTarget:
     """A target for one package resolved live, as the API does."""
@@ -277,12 +311,16 @@ class UpstreamMdPublisher:
 
     # -- run-level checks --------------------------------------------------
 
-    def preflight(self, slugs: Iterable[str]) -> None:
+    def preflight(self, slugs: Iterable[str], push_only: bool = False) -> None:
         """Everything that must hold before the first push, checked up front.
 
         A token that cannot open pull requests would otherwise be discovered
-        after a branch had been pushed, leaving it behind with no PR.
+        after a branch had been pushed, leaving it behind with no PR. A
+        push-only run opens no pull request, so neither the token nor the API's
+        view of each repository matters to it; the push itself is the check.
         """
+        if push_only:
+            return
         if not self.github.can_create_pull_requests:
             raise PublishError(
                 ErrorCode.AUTH_REQUIRED,
@@ -310,7 +348,8 @@ class UpstreamMdPublisher:
 
     def publish(self, target: PublishTarget, *, apply: bool, draft: bool = False,
                 title_prefix: str = "", branch: Optional[str] = None,
-                prior: Optional[PublishResult] = None) -> PublishResult:
+                prior: Optional[PublishResult] = None,
+                push_only: bool = False) -> PublishResult:
         branch = branch or branch_for(
             target.package, target.release, self.branch_template
         )
@@ -349,12 +388,18 @@ class UpstreamMdPublisher:
         if problem:
             result.error = f"refusing to commit: {problem}"
             return result
-        if apply and not self.github.can_create_pull_requests:
+        if apply and not push_only and not self.github.can_create_pull_requests:
             raise PublishError(
                 ErrorCode.AUTH_REQUIRED,
                 "APM_GITHUB_TOKEN is not set, so no pull request could be "
                 "opened. Nothing was pushed.",
             )
+        if push_only and prior is not None and (
+                prior.status.is_done or prior.status is PublishStatus.PR_CLOSED):
+            # A pull request exists, or a reviewer closed one. A link would only
+            # duplicate the first; the second was a person's decision, and
+            # without a token push-only could not even see it. The record stands.
+            return prior.model_copy(deep=True)
 
         workspace = self.workspaces.scratch(
             f"publish-{target.release}-{target.package}"
@@ -364,18 +409,24 @@ class UpstreamMdPublisher:
             workspace.ensure()
             done = self._prepare_and_push(
                 workspace, target, result, apply=apply, title_prefix=title_prefix,
-                prior=prior,
+                prior=prior, push_only=push_only,
             )
         finally:
             workspace.destroy()
         if not done:
+            if push_only and result.status is PublishStatus.DRY_RUN_OK:
+                # The link the push would give, so the dry run shows it too.
+                self._attach_link(target, result)
             return result
+        if push_only:
+            return self._branch_pushed(target, result)
         return self._open_pull_request(target, result, draft=draft)
 
     def _prepare_and_push(self, workspace, target: PublishTarget,
                           result: PublishResult, *, apply: bool,
                           title_prefix: str,
-                          prior: Optional[PublishResult]) -> bool:
+                          prior: Optional[PublishResult],
+                          push_only: bool = False) -> bool:
         """Steps up to and including the push. True when a PR should follow."""
         url, base, branch = target.repository_url, target.base_branch, result.branch
 
@@ -404,11 +455,26 @@ class UpstreamMdPublisher:
                 result.title = prior.title or commit_title(
                     target.package, prior.outcome, title_prefix
                 )
+                stale = None
+                if push_only or prior.status in _WAITING_RECORDS:
+                    stale = self._pushed_file_problem(
+                        workspace, target, branch, existing_branch
+                    )
+                if stale:
+                    result.status = PublishStatus.DRIFT
+                    result.error = stale
+                    return False
                 if not apply:
                     result.status = PublishStatus.DRY_RUN_OK
-                    result.error = "branch already pushed; an apply would open the PR"
+                    result.error = (
+                        "branch already pushed; an apply would give its link again"
+                        if push_only else
+                        "branch already pushed; an apply would open the PR"
+                    )
                     return False
-                return not self._settled_by_earlier_pr(target, result)
+                return not self._settled_by_earlier_pr(
+                    target, result, push_only=push_only
+                )
             result.status = PublishStatus.BRANCH_EXISTS
             result.commit = existing_branch
             result.error = (
@@ -444,7 +510,7 @@ class UpstreamMdPublisher:
             )
             return False
 
-        if self._settled_by_earlier_pr(target, result):
+        if self._settled_by_earlier_pr(target, result, push_only=push_only):
             return False
 
         result.title = commit_title(target.package, outcome, title_prefix)
@@ -483,12 +549,16 @@ class UpstreamMdPublisher:
         return True
 
     def _upstream_moved(self, workspace, target: PublishTarget) -> Optional[str]:
-        """Why the file would record a stale upstream, or None if it would not.
+        """Why the proposal would describe a stale upstream, or None.
 
-        The file states "this upstream ref, at this commit". If the ref has
-        moved since the mapping was made, that statement - and every count
-        beside it - describes a commit that is no longer the tip, so the
-        package goes back for regeneration instead of being proposed.
+        The file names only the repository and the branch, which a new upstream
+        commit does not change. The pull request body states more: "this
+        upstream ref, at this commit", the merge base and every count beside
+        it. If the ref has moved since the mapping was made, that evidence
+        describes a commit that is no longer the tip, so the package goes back
+        for re-resolution instead of being proposed on it. A branch a push-only
+        run pushed keeps its ledger record meanwhile (see
+        publish_ledger.supersedes).
         """
         resolution = target.resolution
         if resolution is None or not resolution.upstream_repository:
@@ -517,20 +587,54 @@ class UpstreamMdPublisher:
             )
         return None
 
+    def _pushed_file_problem(self, workspace, target: PublishTarget,
+                             branch: str, sha: str) -> Optional[str]:
+        """Why this tool's pushed branch cannot be proposed as it is, or None.
+
+        A branch pushed before the plan changed carries the old file, and this
+        tool never overwrites a branch; proposing it would propose bytes nobody
+        reviewed this time. Asked only by push-only runs and for the records in
+        _WAITING_RECORDS, whose branches wait for a person, often across a
+        regenerated plan.
+        """
+        head = workspace.fetch_side("arcos", target.repository_url,
+                                    f"refs/heads/{branch}", depth=1)
+        if head != sha:
+            return f"{branch} moved from {sha[:12]} to {head[:12]} during the run"
+        if workspace.read_file(UPSTREAM_MD_PATH, rev=sha) == target.content:
+            return None
+        return (
+            f"{branch} (pushed by this tool at {sha[:12]}) holds a different "
+            f"{UPSTREAM_MD_PATH} from the reviewed one; delete that branch on "
+            f"the fork - closing any pull request opened from it - then run "
+            f"again"
+        )
+
     def _settled_by_earlier_pr(self, target: PublishTarget,
-                               result: PublishResult) -> bool:
-        """True when a merged or closed PR for this branch already decided it.
+                               result: PublishResult,
+                               push_only: bool = False) -> bool:
+        """True when a pull request for this branch already decided it.
 
         A merged one is done. A closed one was turned down by a reviewer, and
-        proposing it again is a decision for a person, not for a re-run.
+        proposing it again is a decision for a person, not for a re-run. An
+        open one settles only a push-only run, which would otherwise hand out a
+        link to open it a second time; an apply goes on to find it as
+        PR_EXISTS. Without a token nothing can be looked up, and this is False.
         """
         if not self.github.can_create_pull_requests:
             return False
         earlier = self.github.find_pull_request(
             target.slug, result.branch, target.base_branch, state="all"
         )
-        if earlier is None or earlier.state == "open":
+        if earlier is None:
             return False
+        if earlier.state == "open":
+            if not push_only:
+                return False
+            result.pull_request = earlier
+            result.status = PublishStatus.PR_EXISTS
+            result.error = None
+            return True
         result.pull_request = earlier
         if earlier.state == "merged":
             result.status = PublishStatus.PR_MERGED
@@ -543,14 +647,34 @@ class UpstreamMdPublisher:
             )
         return True
 
+    def _branch_pushed(self, target: PublishTarget,
+                       result: PublishResult) -> PublishResult:
+        """Push-only: stop at the pushed branch, with the link to open the PR.
+
+        No pull request exists yet, so this is BRANCH_PUSHED rather than done: a
+        later run with a token resumes from the ledger and opens it without
+        pushing again.
+        """
+        self._attach_link(target, result)
+        result.status = PublishStatus.BRANCH_PUSHED
+        result.error = None
+        return result
+
+    def _attach_link(self, target: PublishTarget, result: PublishResult) -> None:
+        result.pr_create_url, complete = pull_request_link(
+            target.slug, target.base_branch, result.branch, result.title,
+            pull_request_body(target, result),
+        )
+        if not complete:
+            log.info("%s: the pull request body is too long for the link; it "
+                     "is left out of it", target.package)
+
     def _open_pull_request(self, target: PublishTarget, result: PublishResult,
                            *, draft: bool) -> PublishResult:
         try:
             pr = self.github.create_pull_request(
                 target.slug, result.branch, target.base_branch, result.title,
-                build_upstream_md_pr_body(target.resolution, result.base_sha)
-                if target.resolution else result.title,
-                draft=draft,
+                pull_request_body(target, result), draft=draft,
             )
         except GitHubError as exc:
             result.status = PublishStatus.PR_FAILED
@@ -567,10 +691,20 @@ class UpstreamMdPublisher:
 
     def select(self, targets: Sequence[PublishTarget], history=None, *,
                retry_failed: bool = False, recheck: bool = False,
-               limit: Optional[int] = None,
+               limit: Optional[int] = None, push_only: bool = False,
                ) -> Tuple[List[Tuple[PublishTarget, Optional[PublishResult]]],
                           List[PublishResult]]:
-        """Which targets to process, and the earlier results kept for the rest."""
+        """Which targets to process, and the earlier results kept for the rest.
+
+        A push-only run also keeps what it can do nothing more for: a branch it
+        already pushed (BRANCH_PUSHED), whose link the links file carries, and
+        a pull request a reviewer closed (PR_CLOSED). Queuing them would make
+        --limit take the same packages every time and --confirm-count count
+        them. A run with a token still queues BRANCH_PUSHED - to open its pull
+        request. --recheck queues everything, as it always has.
+        """
+        settled_for_push_only = (PublishStatus.BRANCH_PUSHED,
+                                 PublishStatus.PR_CLOSED)
         queue, kept = [], []
         for target in self.ordered(targets):
             prior = history.get(target.package) if history else None
@@ -580,7 +714,9 @@ class UpstreamMdPublisher:
                 elif prior:
                     kept.append(prior)
                 continue
-            if prior and prior.status.is_done and not recheck:
+            if prior and not recheck and (
+                    prior.status.is_done
+                    or (push_only and prior.status in settled_for_push_only)):
                 kept.append(prior)
                 continue
             queue.append((target, prior))
@@ -594,10 +730,14 @@ class UpstreamMdPublisher:
                      stop_after_failures: int = 3, draft: bool = False,
                      title_prefix: str = "",
                      progress: Optional[Callable[[int, int, str], None]] = None,
+                     push_only: bool = False,
                      ) -> List[PublishResult]:
         """Process `queue` in order; one package's failure never stops the rest,
         but `stop_after_failures` consecutive ones do - that is a systemic
-        problem (auth, the bridge), not a package."""
+        problem (auth, the bridge), not a package.
+
+        `push_only` pushes but opens no pull request. It is a real push all the
+        same, so it needs the same confirmation as any other apply."""
         if apply:
             if confirm_count != len(queue):
                 raise PublishError(
@@ -605,7 +745,7 @@ class UpstreamMdPublisher:
                     f"This run would push {len(queue)} package(s); confirm with "
                     f"--confirm-count {len(queue)}. Nothing was pushed.",
                 )
-            self.preflight(t.slug for t, _ in queue)
+            self.preflight((t.slug for t, _ in queue), push_only=push_only)
 
         results: List[PublishResult] = []
         consecutive = 0
@@ -615,7 +755,7 @@ class UpstreamMdPublisher:
             try:
                 result = self.publish(
                     target, apply=apply, draft=draft, title_prefix=title_prefix,
-                    prior=prior,
+                    prior=prior, push_only=push_only,
                 )
             except PublishError:
                 raise

@@ -3,6 +3,8 @@
 No test here may reach the network or create a real pull request.
 """
 
+from urllib.parse import parse_qs, urlsplit
+
 import httpx
 import pytest
 
@@ -13,7 +15,8 @@ from apm.domain.models import (
 )
 from apm.domain.enums import Criticality
 from apm.services.github_service import (
-    GitHubError, GitHubService, build_patch_pr_body, repo_slug,
+    GitHubError, GitHubService, PR_LINK_MAX_LENGTH, bare_pull_request_link,
+    build_patch_pr_body, pull_request_link, repo_slug,
 )
 
 
@@ -188,3 +191,69 @@ def test_a_merged_pull_request_is_not_reported_as_closed():
     pr = _service(handler).find_pull_request("Arrcus/mstpd", "b", "aminor",
                                              state="all")
     assert pr.state == "merged"
+
+
+# -- the push-only link -------------------------------------------------------
+
+BRANCH = "upstream-metadata/bookworm/mstpd"
+
+
+def _query(link):
+    return {k: v[0] for k, v in parse_qs(urlsplit(link).query).items()}
+
+
+def test_the_link_opens_githubs_form_for_exactly_this_branch():
+    title = "mstpd: add debian/upstream.md with verified upstream"
+    body = "Problem Description :\nA | B & C #1 100% ünï\n\n```text\nx\n```"
+
+    link, complete = pull_request_link("Arrcus/mstpd", "aminor", BRANCH,
+                                       title, body)
+
+    assert complete is True
+    # Slashes in the branch stay as they are; everything in the form is
+    # percent-encoded, so no character of the body can end the parameter.
+    assert link.startswith(
+        f"https://github.com/Arrcus/mstpd/compare/aminor...{BRANCH}?quick_pull=1&"
+    )
+    assert "title=mstpd%3A%20add%20debian%2Fupstream.md%20with%20verified%20upstream" in link
+    assert " " not in link and "\n" not in link and "#" not in link
+    assert link.count("&") == 2
+    assert _query(link) == {"quick_pull": "1", "title": title, "body": body}
+
+
+def test_a_body_too_long_for_a_url_is_left_out_whole():
+    body = "Problem Description :\n" + "x" * PR_LINK_MAX_LENGTH
+
+    link, complete = pull_request_link("Arrcus/mstpd", "aminor", BRANCH, "t", body)
+
+    assert complete is False
+    assert len(link) <= PR_LINK_MAX_LENGTH
+    assert _query(link) == {"quick_pull": "1", "title": "t"}
+
+
+def test_the_length_limit_counts_the_encoded_link():
+    body = " " * 100  # three characters each once encoded
+    short, _ = pull_request_link("o/r", "aminor", BRANCH, "t")
+
+    _, fits = pull_request_link("o/r", "aminor", BRANCH, "t", body,
+                                max_length=len(short) + 6 + 300)
+    _, too_long = pull_request_link("o/r", "aminor", BRANCH, "t", body,
+                                    max_length=len(short) + 6 + 299)
+    assert (fits, too_long) == (True, False)
+
+
+def test_a_link_without_a_title_or_body_is_the_bare_compare_page():
+    link, complete = pull_request_link("Arrcus/mstpd", "aminor", BRANCH)
+    assert (link, complete) == (
+        f"https://github.com/Arrcus/mstpd/compare/aminor...{BRANCH}?quick_pull=1",
+        True,
+    )
+    full, _ = pull_request_link("Arrcus/mstpd", "aminor", BRANCH, "t", "b")
+    assert bare_pull_request_link(full) == link
+    assert bare_pull_request_link(None) == ""
+
+
+def test_the_link_honours_another_web_host():
+    link, _ = pull_request_link("o/r", "main", "upstream-metadata/x",
+                                web_url="https://ghe.example.com/")
+    assert link == "https://ghe.example.com/o/r/compare/main...upstream-metadata/x?quick_pull=1"

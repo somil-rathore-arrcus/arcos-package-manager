@@ -36,7 +36,7 @@ docker compose exec app apm doctor --repo Arrcus/mstpd   # storage, git, GitHub
 | Symptom | Cause | Fix |
 |---|---|---|
 | Dashboard says read-only; `create_pull_requests: false` | No `APM_GITHUB_TOKEN`, or the container was not recreated after adding it | Set it in `.env`; `docker compose up -d --force-recreate` |
-| `APM_GITHUB_TOKEN is not set, so no pull request could be opened. Nothing was pushed.` | As it says | As above |
+| `APM_GITHUB_TOKEN is not set, so no pull request could be opened. Nothing was pushed.` | `--apply` without a token | Set the token as above, or add `--push-only`: it pushes the branches and prints a link per package for a person to open the PR |
 | `GitHub rejected the token. Check it is valid and not expired.` | Invalid, revoked or expired | Create a new token; replace it in `.env`; recreate |
 | `The token is not SSO-authorised for Arrcus.` | SAML SSO not granted | Authorise the token for the organisation on GitHub |
 | `The token cannot see Arrcus/<repo>.` | The token has no access to that repository | Add the repository to the token's access |
@@ -70,8 +70,17 @@ docker compose exec app apm doctor --repo Arrcus/mstpd   # storage, git, GitHub
 | `not in upstream-md-plan-bookworm.json: <p>` | The plan does not list that package (e.g. it was generated with `--package` for another one) | Regenerate without `--package` |
 | `name the packages with --package, or pass --all` | No scope given | Add one |
 | `This run would push N package(s); confirm with --confirm-count N.` | `--apply` without a matching confirmation | Check N is what you expect; pass it |
-| `DRIFT` | The file, the mapping or the upstream ref changed since the plan | `resolve-release` (if upstream moved), `generate-upstream-md`, review, dry run |
-| `CONFLICT` | The fork has a `debian/upstream.md` this tool did not write | Compare by hand; never replaced automatically |
+| `DRIFT` | The file, the mapping or the upstream ref changed since the plan - or a branch a push-only run pushed holds an older file than the reviewed one | `resolve-release` (if upstream moved), `generate-upstream-md`, review, dry run. A `BRANCH_PUSHED` package keeps its ledger record and link meanwhile. For an older pushed file: delete that branch on the fork, closing any PR opened from it, then run again |
+| Every package `DRIFT` right after updating the tool | The plan and files were generated before the two-field format | `generate-upstream-md`, review the new plan, dry run |
+| `verify_upstream_md.py`: `the plan predates the two-field file; regenerate` | As above | `generate-upstream-md`, then verify again |
+| `verify_upstream_md.py`: `every field matches the mapping row` fails | A file says something its mapping row does not (e.g. a branch where the mapping has only a tag) | Regenerate; if it persists it is a renderer bug - do not publish |
+| `CONFLICT` | The fork has a `debian/upstream.md` the tool does not recognise as its own: not the two-field format and no older version's marker | Compare by hand; never replaced automatically |
+| `BRANCH_PUSHED` | `--push-only`: the branch is pushed, no PR exists yet | A person opens the link in `out/upstream-md-pr-links-<release>.md`; a later `--apply` with a token records or opens the PR without pushing again. A later push-only run leaves it alone |
+| `DRIFT`: `... holds a different debian/upstream.md from the reviewed one` | The plan's file changed after this tool pushed the branch; nothing is overwritten | Delete that branch on the fork, closing any PR opened from it, then run again |
+| `--confirm names mstpd but this run would push nothing` on a push-only run | The package is already `BRANCH_PUSHED` (or has a PR); push-only leaves it alone | Nothing to do: its link is in the links file. Pass `--confirm-count 0` to rewrite that file |
+| A push-only link shows GitHub's 404 page | Not signed in to GitHub, or the account has no access to that repository | Open it as someone with access to the repository |
+| The PR form opens with no description | The full link was over 8000 characters, so the body was left out | Paste the description from the links file, with its three CI sections |
+| A link from `upstream-md-pr-links-dryrun-<release>.md` does not open the PR form | A dry run pushes nothing, so the branch does not exist yet | Use the links from the apply run's file, `upstream-md-pr-links-<release>.md` |
 | `BRANCH_EXISTS` | The branch exists and this tool did not create it | Find out who did; delete it only if it is known to be unwanted |
 | `PR_CLOSED` | A reviewer closed the earlier PR | A person decides whether to propose again |
 | Run stopped after 3 failures | Consecutive failures usually mean auth or network | Fix the cause; re-run (or `--retry-failed`) |
@@ -84,4 +93,4 @@ docker compose exec app apm doctor --repo Arrcus/mstpd   # storage, git, GitHub
 | Blank page, API works | The image was built without the dashboard - rebuild (`docker compose build --no-cache`) |
 | "Resolution could not complete" | A `FAILED` resolution; the review reason says why |
 | "A proven relationship ... is needed before comparing" | The package is not `VERIFIED`; Compare is disabled by design |
-| Create pull request disabled | No token configured |
+| Create pull request disabled | No token configured. The CLI's `--push-only` pushes without one; the dashboard has no push-only button |

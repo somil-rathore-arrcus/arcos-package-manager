@@ -57,7 +57,10 @@ def generate(request: UpstreamMdRequest, app=Depends(container)):
 @router.post("/upstream-md/pr", response_model=PublishResult)
 def open_pull_request(request: UpstreamMdPrRequest, app=Depends(container)):
     """Commit the file on a new branch and open a PR, through the same publisher
-    the CLI uses. Requires explicit confirmation unless it is a dry run."""
+    the CLI uses. Requires explicit confirmation unless it is a dry run.
+
+    With push_only the branch is pushed and no PR is opened; the result carries
+    the link a person opens it from, and no token is needed."""
     if not request.confirm and not request.dry_run:
         raise PublishError(
             ErrorCode.INVALID_REQUEST,
@@ -80,12 +83,14 @@ def open_pull_request(request: UpstreamMdPrRequest, app=Depends(container)):
     )
     if not request.dry_run:
         # The same pre-flight as the CLI: a token that cannot open the PR is
-        # found out before anything is pushed.
-        app.publisher.preflight([target.slug])
+        # found out before anything is pushed. Push-only opens no PR, so it
+        # needs no token.
+        app.publisher.preflight([target.slug], push_only=request.push_only)
     ledger = PublishLedger.for_release(OUT_DIR, request.release)
     result = app.publisher.publish(
         target, apply=not request.dry_run, draft=request.draft,
         branch=request.branch_name or None, prior=ledger.get(request.package),
+        push_only=request.push_only,
     )
     if not request.dry_run:
         ledger.record(result)

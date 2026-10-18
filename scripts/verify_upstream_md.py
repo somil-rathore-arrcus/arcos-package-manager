@@ -3,8 +3,13 @@
 
 The whole point of generating them is that the committed record and the tool
 cannot disagree. This re-reads the files as a stranger would and holds them
-against the release CSV, so a renderer that quietly stops emitting a field, or
-emits one the mapping does not support, is caught before anything is proposed.
+against the release CSV, so a renderer that quietly writes a branch the mapping
+does not record - or a guess where the mapping has none - is caught before
+anything is proposed.
+
+Each file must be exactly two fields, "Upstream Source" and "Current Upstream
+Branch". Standalone on purpose: it does not import apm, so a bug in the renderer
+cannot also be a bug in the check.
 
     ./.venv/bin/python scripts/verify_upstream_md.py [bookworm]
 """
@@ -17,8 +22,24 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
+
+SOURCE = "Upstream Source"
+BRANCH = "Current Upstream Branch"
+# The renderer's fixed N/A sentences, restated rather than imported.
+NO_BRANCH = "N/A - no upstream branch verified"
+NOT_IN_FORK = " (the ARCoS fork does not contain this tag)"
+FLAG_BRANCH_NOT_VERIFIED = "BRANCH_NOT_VERIFIED"
+
+_FIELD = re.compile(
+    rf"^({re.escape(SOURCE)}|{re.escape(BRANCH)})\s*:\s*(.*?)\s*$"
+)
+# A ref the mapping holds without saying whether it is a branch or a tag.
+_UNKNOWN_REF = re.compile(
+    rf"{re.escape(NO_BRANCH)}; ref \S+ is not recorded as a branch or a tag"
+)
 
 failures = []
 
@@ -29,17 +50,111 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         failures.append(name)
 
 
-def fields(text: str) -> dict:
-    """The '- Key: value' lines, keyed by section so names cannot collide."""
-    found, section = {}, ""
-    for line in text.splitlines():
-        if line.startswith("## "):
-            section = line[3:].strip()
+def parse_fields(text: str) -> Optional[Dict[str, str]]:
+    """The two fields, or None if the file holds anything else or repeats one."""
+    found: Dict[str, str] = {}
+    for line in re.sub(r"\r\n?", "\n", text).split("\n"):
+        if not line.strip():
             continue
-        match = re.match(r"^- ([^:]+): (.*)$", line)
-        if match:
-            found[f"{section}/{match.group(1).strip()}"] = match.group(2).strip()
-    return found
+        match = _FIELD.match(line)
+        if match is None or match.group(1) in found:
+            return None
+        found[match.group(1)] = match.group(2)
+    return found if set(found) == {SOURCE, BRANCH} else None
+
+
+def shape_problem(package: str, text: str) -> Optional[str]:
+    """Why a file is not the two-field file the generator writes, or None."""
+    value = parse_fields(text)
+    if value is None:
+        return f"{package}: not exactly the two fields {SOURCE!r} and {BRANCH!r}"
+    if text != f"{SOURCE}: {value[SOURCE]}\n\n{BRANCH}: {value[BRANCH]}\n":
+        return (f"{package}: not laid out as generated (one blank line between "
+                f"the fields, one trailing newline)")
+    return None
+
+
+def field_problems(package: str, row: dict, value: Dict[str, str]) -> List[str]:
+    """Where a file's two values disagree with its mapping row."""
+    problems = []
+    status = (row.get("Resolution Status") or "").strip()
+    source, branch = value[SOURCE], value[BRANCH]
+    if status != "VERIFIED":
+        # Only reachable with --include-needs-review: the candidate upstream
+        # must not appear, in either field.
+        unverified = f"N/A - not verified (status {status})"
+        if source != unverified:
+            problems.append(f"{package} {SOURCE}: file={source!r} want={unverified!r}")
+        if branch != unverified:
+            problems.append(f"{package} {BRANCH}: file={branch!r} want={unverified!r}")
+        return problems
+
+    want = (row.get("Upstream Repository") or "").strip() or "N/A"
+    if source != want:
+        problems.append(f"{package} {SOURCE}: file={source!r} mapping={want!r}")
+
+    mapped_branch = (row.get("Upstream Branch") or "").strip()
+    mapped_tag = (row.get("Upstream Tag") or "").strip()
+    if mapped_branch:
+        if branch != mapped_branch:
+            problems.append(f"{package} {BRANCH}: file={branch!r} "
+                            f"mapping={mapped_branch!r}")
+    elif mapped_tag:
+        # A tag is not a branch: the file must say no branch was verified, and
+        # name the tag rather than pass it off as one. Compared whole, so a
+        # longer tag, an added branch or a fork note the row does not support
+        # cannot hide behind the right prefix.
+        allowed = _tag_values(row, mapped_tag)
+        if branch not in allowed:
+            problems.append(f"{package} {BRANCH}: file={branch!r} "
+                            f"want={' or '.join(repr(a) for a in allowed)}")
+    elif branch != NO_BRANCH and not _UNKNOWN_REF.fullmatch(branch):
+        problems.append(f"{package} {BRANCH}: file={branch!r}, mapping records "
+                        f"no branch or tag")
+    return problems
+
+
+def _tag_values(row: dict, tag: str) -> List[str]:
+    """The branch values a tag-only row allows, most specific first.
+
+    The fork note belongs exactly where the row says the fork lacks the base tag
+    and that tag is the one named. A CSV without those columns cannot say, so
+    either form is accepted there.
+    """
+    plain = f"{NO_BRANCH}; upstream tag {tag}"
+    noted = plain + NOT_IN_FORK
+    if "ARCoS Contains Base Tag" not in row or "Upstream Base Tag" not in row:
+        return [plain, noted]
+    lacks = (row.get("ARCoS Contains Base Tag") or "").strip().lower() == "no"
+    named = (row.get("Upstream Base Tag") or "").strip() == tag
+    return [noted] if lacks and named else [plain]
+
+
+def plan_entry_problems(entry: dict, text: str) -> List[str]:
+    """Whether the plan records what the file says, and flags what it should."""
+    package = entry["package"]
+    if "upstream_source" not in entry or "current_upstream_branch" not in entry:
+        return [f"{package}: the plan predates the two-field file; regenerate"]
+    value = parse_fields(text) or {}
+    problems = []
+    if entry["upstream_source"] != value.get(SOURCE):
+        problems.append(f"{package} upstream_source: plan="
+                        f"{entry['upstream_source']!r} file={value.get(SOURCE)!r}")
+    if entry["current_upstream_branch"] != value.get(BRANCH):
+        problems.append(f"{package} current_upstream_branch: plan="
+                        f"{entry['current_upstream_branch']!r} "
+                        f"file={value.get(BRANCH)!r}")
+    flagged = FLAG_BRANCH_NOT_VERIFIED in {
+        f.get("code") for f in entry.get("flags") or []
+    }
+    unverified = (value.get(BRANCH) or "N/A").startswith("N/A")
+    if flagged != unverified:
+        problems.append(
+            f"{package}: {FLAG_BRANCH_NOT_VERIFIED} is "
+            f"{'set' if flagged else 'missing'} but the branch field is "
+            f"{value.get(BRANCH)!r}"
+        )
+    return problems
 
 
 def main(release: str) -> int:
@@ -59,6 +174,7 @@ def main(release: str) -> int:
         path.parent.parent.name: path
         for path in md_dir.glob("*/debian/upstream.md")
     }
+    texts = {p: path.read_bytes().decode("utf-8") for p, path in generated.items()}
 
     check("every generated file has a mapping row",
           all(p in rows for p in generated),
@@ -71,48 +187,17 @@ def main(release: str) -> int:
     check("no file was generated for a NO_UPSTREAM package", not invented,
           ", ".join(invented))
 
-    mismatches, unmarked = [], []
-    for package, path in sorted(generated.items()):
-        row = rows.get(package)
-        if row is None:
-            continue
-        text = path.read_text()
-        if "Generated by the ARCoS Package Manager" not in text:
-            unmarked.append(package)
-        value = fields(text)
+    shape, mismatches = [], []
+    for package, text in sorted(texts.items()):
+        problem = shape_problem(package, text)
+        if problem:
+            shape.append(problem)
+        value = parse_fields(text)
+        if value is not None and package in rows:
+            mismatches += field_problems(package, rows[package], value)
 
-        expected = {
-            "ARCoS/Repository": row["ARCoS Repository"],
-            "ARCoS/Release": row["ARCoS Release"],
-            "ARCoS/Branch": row["ARCoS Branch"],
-            "ARCoS/Path": row["ARCoS Path"],
-            "Debian/Source package": row["Debian Source Package"],
-            "Debian/Version": row["Debian Version"],
-            "Debian/VCS repository": row["Debian VCS Repository"],
-            "Debian/VCS branch": row["Debian VCS Branch"],
-            "Upstream/Repository": row["Upstream Repository"],
-            "Upstream/Branch": row["Upstream Branch"],
-            "Upstream/Tag": row["Upstream Tag"],
-            "Resolution/Status": row["Resolution Status"],
-            "Evidence/Source": row["Evidence Source"],
-            "Evidence/URL": row["Evidence URL"],
-            "Evidence/Common ancestor": row["Common Ancestor"],
-        }
-        for key, want in expected.items():
-            got = value.get(key, "<missing>")
-            # An unestablished field is written as N/A, and a whole optional
-            # block - the ancestry counts, for a package whose origin was not
-            # probed - is left out rather than filled with placeholders. Both
-            # mean the same thing as an empty mapping cell: not established.
-            if got in ("N/A", "<missing>"):
-                got = ""
-            # The mapping shortens SHAs for reading.
-            if want and len(want) == 12 and got.startswith(want):
-                continue
-            if got != want:
-                mismatches.append(f"{package} {key}: file={got!r} mapping={want!r}")
-
-    check("every file marks itself as generated", not unmarked, ", ".join(unmarked))
+    check("every file has exactly the two fields and nothing else", not shape,
+          "; ".join(shape[:5]))
     check("every field matches the mapping row", not mismatches,
           "; ".join(mismatches[:5]))
 
@@ -137,6 +222,13 @@ def main(release: str) -> int:
         ]
         check("every planned branch is under upstream-metadata/", not outside,
               ", ".join(outside))
+
+        recorded = []
+        for entry in plan["entries"]:
+            if entry["package"] in texts:
+                recorded += plan_entry_problems(entry, texts[entry["package"]])
+        check("the plan records each file's values and flags every unverified "
+              "branch", not recorded, "; ".join(recorded[:5]))
 
         # The publisher commits these bytes only if they still hash to what
         # the plan recorded; say so here first rather than at push time.

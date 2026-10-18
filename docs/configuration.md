@@ -55,7 +55,7 @@ values, shown in the last column.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `APM_GITHUB_TOKEN` | empty | Token for the GitHub REST API. Empty = read-only. **Secret.** See [authentication.md](authentication.md) |
+| `APM_GITHUB_TOKEN` | empty | Token for the GitHub REST API. Empty = read-only: the tool opens no pull request (`publish-upstream-md --push-only` still pushes branches with the SSH key). **Secret.** See [authentication.md](authentication.md) |
 | `APM_GITHUB_API_URL` | `https://api.github.com` | API base URL |
 
 ### Commits the tool creates
@@ -137,7 +137,36 @@ Only for a deployment whose own key cannot reach the repositories.
 | `comparison.content_check_limit` | Upstream commits checked by content per comparison (1000); beyond it they are `UNKNOWN` |
 | `security.osv` | OSV.dev lookups: on/off, URL, timeout, cache TTL |
 | `private_repository_patterns` | Default private patterns for the `auto` backend |
-| `upstream_md_publish` | Branch template `upstream-metadata/{release}/{package}`, `exclude` (packages never proposed, with the reason), `defer` (processed last: `openssl`, `linux`) |
+| `upstream_md_publish` | Branch template `upstream-metadata/{release}/{package}`, `exclude` (packages never proposed, with the reason - [below](#upstream_md_publishexclude)), `defer` (processed last: `openssl`, `linux`) |
+
+### `upstream_md_publish.exclude`
+
+Packages `publish-upstream-md` never proposes, whatever their status. An
+excluded package that reaches the plan's entries - `VERIFIED`, or generated
+with `--include-needs-review` - is recorded as `SKIPPED_EXCLUDED` with its
+reason in the ledger. One the generator skipped (`NEEDS_REVIEW`, by default) is
+recorded as `SKIPPED_NEEDS_REVIEW` with its resolution reason instead: it never
+reaches the exclude check. Generation is not affected: a `VERIFIED` excluded
+package still gets a file and a plan entry, so the exclusion is a decision
+about publishing, not a hidden answer.
+
+| Package | Reason |
+|---|---|
+| `ONL-standalone`, `ONL-xc` | `Arrcus/onl-testbed has no debian/ directory; where the file belongs is awaiting a decision` |
+| `liburcu`, `lldpd`, `lttng-tools`, `lttng-ust`, `net-snmp` | `curated upstream conflict (fork came from the salsa packaging repo); awaiting a human decision - keep excluded until decided` |
+
+The five `CURATED_CONFLICT` packages are `NEEDS_REVIEW` today and would be
+skipped anyway, so the ledger shows them as `SKIPPED_NEEDS_REVIEW`, not
+`SKIPPED_EXCLUDED`. They are listed so that a later re-resolution which marks one
+`VERIFIED` - for example after an override change - still cannot propose it
+before a person has decided which upstream the file should name: the curated
+GitHub project, or the Debian packaging repository on salsa the fork came
+from.
+
+To release one, remove its entry through a pull request to this repository,
+then `docker compose restart`, `generate-upstream-md` and a dry run.
+`--exclude P` on the command line adds to the list for one run; it cannot
+remove an entry.
 
 ## `config/overrides.yaml`
 

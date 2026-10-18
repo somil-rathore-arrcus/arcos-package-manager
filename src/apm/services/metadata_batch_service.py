@@ -8,7 +8,8 @@ Two things happen here, and they are kept apart on purpose:
                committing it would do to what is already in the fork.
 
   planning     records the branch, base branch, commit message and diff that a
-               later push would use.
+               later push would use, the two values the file records, and
+               the review flags a person should look at before it is merged.
 
 Nothing in this module writes to a remote. It reads each fork to compare, and
 that is the only network effect it has: the plan is a description of work that
@@ -28,7 +29,9 @@ from ..domain.models import UpstreamResolution
 from .upstream_md_publisher import (
     BRANCH_TEMPLATE, branch_for, commit_title, sha256_text,
 )
-from .upstream_md_service import UPSTREAM_MD_PATH
+from .upstream_md_service import (
+    UPSTREAM_MD_PATH, branch_field, review_flags, source_field,
+)
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +56,17 @@ class PlanEntry:
     diff: str = ""
     upstream_repository: str = ""
     upstream_ref: str = ""
+    # Exactly what the file says, so the plan can be reviewed without opening
+    # every file, and the verifier can hold one against the other.
+    upstream_source: str = ""
+    current_upstream_branch: str = ""
+    # The facts under those values: a branch only when one was verified, the
+    # tag when a tag is all the mapping has.
+    upstream_branch: str = ""
+    upstream_tag: str = ""
+    branch_verified: bool = False
+    # [{"code", "detail"}]: what to check before merging. Never blocks it.
+    flags: List[dict] = field(default_factory=list)
     reason: str = ""
     # True when the fork could not be read, so CREATED here means "nothing was
     # found", not "nothing is there".
@@ -76,6 +90,12 @@ class PlanEntry:
             "local_path": self.local_path,
             "upstream_repository": self.upstream_repository,
             "upstream_ref": self.upstream_ref,
+            "upstream_source": self.upstream_source,
+            "current_upstream_branch": self.current_upstream_branch,
+            "upstream_branch": self.upstream_branch,
+            "upstream_tag": self.upstream_tag,
+            "branch_verified": self.branch_verified,
+            "flags": [dict(flag) for flag in self.flags],
             "reason": self.reason,
             "existing_unknown": self.existing_unknown,
             "sha256": self.sha256,
@@ -96,6 +116,11 @@ class BatchResult:
         for entry in self.entries:
             counts[entry.outcome] = counts.get(entry.outcome, 0) + 1
         return counts
+
+    @property
+    def flagged(self) -> List[PlanEntry]:
+        return sorted((e for e in self.entries if e.flags),
+                      key=lambda e: e.package)
 
 
 class MetadataBatchService:
@@ -184,6 +209,7 @@ class MetadataBatchService:
             target.write_text(document.content, encoding="utf-8")
 
             outcome = document.outcome or UpstreamMdOutcome.CREATED
+            tracked = branch_field(resolution)
             result.entries.append(PlanEntry(
                 package=resolution.package,
                 release=release,
@@ -202,6 +228,13 @@ class MetadataBatchService:
                     if resolution.upstream_repository else ""
                 ),
                 upstream_ref=resolution.upstream_ref or "",
+                upstream_source=source_field(resolution),
+                current_upstream_branch=tracked.value,
+                upstream_branch=tracked.branch or "",
+                upstream_tag=tracked.tag or "",
+                branch_verified=tracked.verified,
+                flags=[{"code": f.code, "detail": f.detail}
+                       for f in review_flags(resolution)],
                 reason=resolution.reason or "",
                 existing_unknown=unknown,
                 sha256=sha256_text(document.content),
@@ -247,15 +280,33 @@ class MetadataBatchService:
             f"- Commit message: `{self.commit_message}`",
             f"- Branch: `{branch_for('<package>', result.release, self.branch_template)}`",
             "",
-            "| Package | ARCoS repository | Base branch | Branch | Outcome | Upstream |",
-            "|---|---|---|---|---|---|",
+            "| Package | ARCoS repository | Base branch | Branch | Outcome | "
+            "Upstream Source | Current Upstream Branch | Flags |",
+            "|---|---|---|---|---|---|---|---|",
         ]
         for entry in sorted(result.entries, key=lambda e: e.package):
             lines.append(
                 f"| {entry.package} | {entry.arcos_repository} | "
                 f"{entry.arcos_branch} | {entry.branch} | {entry.outcome} | "
-                f"{entry.upstream_repository} @ {entry.upstream_ref} |"
+                f"{entry.upstream_source} | {entry.current_upstream_branch} | "
+                f"{', '.join(f['code'] for f in entry.flags)} |"
             )
+        # Always present, so "nothing flagged" is said rather than inferred
+        # from a missing section.
+        lines += [
+            "",
+            "## Flagged for review",
+            "",
+            "A flag does not stop a package from being published. It says what "
+            "to check before the pull request is merged, and the pull request "
+            "body repeats it.",
+            "",
+        ]
+        if not result.flagged:
+            lines.append("No package is flagged.")
+        for entry in result.flagged:
+            lines.append(f"- {entry.package}")
+            lines += [f"  - {f['code']}: {f['detail']}" for f in entry.flags]
         if result.skipped:
             lines += [
                 "",

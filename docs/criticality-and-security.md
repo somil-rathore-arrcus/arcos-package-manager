@@ -67,7 +67,7 @@ No finding leaves a commit `UNKNOWN`, never "safe".
 | Dashboard, Comparison card | **Critical/security missing** and **Stable-nominated** counts; **Critical**, **Stable**, **Normal**, **Unknown** filters; per commit the level and its evidence; **External security evidence** |
 | Dashboard | **Select critical (N)** selects every missing commit with security evidence - the only automatic selection there is |
 | `apm compare` | `critical missing N   stable N`, and one `security source` line per provider (`N finding(s)` or `unavailable (...)`) |
-| `debian/upstream.md` | Backlog: `Critical/security missing`, `Stable-nominated missing`; Debian patches: security patches and CVEs referenced |
+| `debian/upstream.md` pull request body | The comparison backlog row, including `critical/security missing` (the file itself records only the upstream source and branch) |
 | Patch PR body | each applied commit with its level and evidence |
 
 ## How to read it

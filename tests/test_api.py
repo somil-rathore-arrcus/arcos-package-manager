@@ -174,20 +174,34 @@ class FakePublisher:
     def __init__(self):
         self.calls = []
         self.preflights = []
+        self.push_only_preflights = []
 
-    def preflight(self, slugs):
-        self.preflights.append(list(slugs))
+    def preflight(self, slugs, push_only=False):
+        (self.push_only_preflights if push_only else self.preflights).append(
+            list(slugs))
 
     def publish(self, target, *, apply, draft=False, title_prefix="",
-                branch=None, prior=None):
+                branch=None, prior=None, push_only=False):
         validate_branch(branch or "upstream-metadata/bookworm/x", target.base_branch)
         self.calls.append({"package": target.package, "apply": apply,
-                           "branch": branch, "content": target.content})
+                           "branch": branch, "content": target.content,
+                           "push_only": push_only})
+        branch = branch or f"upstream-metadata/bookworm/{target.package}"
+        if push_only:
+            return PublishResult(
+                package=target.package, release=target.release,
+                status=PublishStatus.BRANCH_PUSHED if apply
+                else PublishStatus.DRY_RUN_OK,
+                repository=target.slug, base_branch=target.base_branch,
+                branch=branch, pushed=apply,
+                pr_create_url=f"https://github.com/{target.slug}/compare/"
+                              f"{target.base_branch}...{branch}?quick_pull=1",
+            )
         return PublishResult(
             package=target.package, release=target.release,
             status=PublishStatus.PR_OPENED if apply else PublishStatus.DRY_RUN_OK,
             repository=target.slug, base_branch=target.base_branch,
-            branch=branch or f"upstream-metadata/bookworm/{target.package}",
+            branch=branch,
             pull_request=PullRequest(number=1, url="https://github.com/o/r/pull/1")
             if apply else None,
         )
@@ -449,7 +463,8 @@ def test_upstream_md_pr_goes_through_the_publisher_and_is_recorded(
     assert body["pull_request"]["url"] == "https://github.com/o/r/pull/1"
     assert fake.publisher.preflights == [["Arrcus/pyrad"]]
     assert fake.publisher.calls == [{"package": "pyrad", "apply": True,
-                                     "branch": None, "content": "# pyrad\n"}]
+                                     "branch": None, "content": "# pyrad\n",
+                                     "push_only": False}]
 
     listed = client.get("/api/upstream-md/prs", params={"release": "bookworm"})
     assert [e["package"] for e in listed.json()] == ["pyrad"]
@@ -465,6 +480,137 @@ def test_upstream_md_dry_run_needs_no_confirmation_and_records_nothing(
     assert fake.publisher.calls[0]["apply"] is False
     assert fake.publisher.preflights == []
     assert client.get("/api/upstream-md/prs").json() == []
+
+
+def test_upstream_md_push_only_needs_no_token_and_is_recorded(app_container,
+                                                              md_out):
+    client, fake = app_container
+    fake.github.token = ""
+
+    body = client.post("/api/upstream-md/pr", json={
+        "package": "pyrad", "release": "bookworm", "confirm": True,
+        "push_only": True,
+    }).json()
+
+    assert body["status"] == "BRANCH_PUSHED"
+    assert body["pull_request"] is None
+    assert body["pr_create_url"].startswith(
+        "https://github.com/Arrcus/pyrad/compare/aminor...upstream-metadata/")
+    assert fake.publisher.push_only_preflights == [["Arrcus/pyrad"]]
+    assert fake.publisher.preflights == []
+    assert fake.publisher.calls[0]["push_only"] is True
+    assert fake.github.created == []
+    listed = client.get("/api/upstream-md/prs", params={"release": "bookworm"})
+    assert [e["status"] for e in listed.json()] == ["BRANCH_PUSHED"]
+
+
+def test_upstream_md_push_only_still_needs_confirmation(app_container, md_out):
+    client, fake = app_container
+    response = client.post("/api/upstream-md/pr", json={
+        "package": "pyrad", "release": "bookworm", "push_only": True,
+    })
+    assert response.status_code == 400
+    assert fake.publisher.calls == [] and fake.publisher.push_only_preflights == []
+
+
+def test_upstream_md_push_only_dry_run_returns_the_link_and_records_nothing(
+        app_container, md_out):
+    client, fake = app_container
+    body = client.post("/api/upstream-md/pr", json={
+        "package": "pyrad", "release": "bookworm", "push_only": True,
+        "dry_run": True,
+    }).json()
+    assert body["status"] == "DRY_RUN_OK" and body["pr_create_url"]
+    assert fake.publisher.calls[0] == {
+        "package": "pyrad", "apply": False, "branch": None,
+        "content": "# pyrad\n", "push_only": True,
+    }
+    assert fake.publisher.preflights == fake.publisher.push_only_preflights == []
+    assert client.get("/api/upstream-md/prs").json() == []
+
+
+def test_upstream_md_push_only_through_the_real_publisher(app_container, md_out,
+                                                          tmp_path):
+    """Route and publisher together: no token, one push, no pull request."""
+    from apm.services.upstream_md_publisher import UpstreamMdPublisher
+    from apm.services.upstream_md_service import UpstreamMdService
+    from test_upstream_md_publisher import (
+        FakeGitHub as RecordingGitHub, FakeWorkspaces as RecordingWorkspaces,
+        Remote, _resolution,
+    )
+
+    client, fake = app_container
+    remote = Remote(tmp_path / "remote")
+    resolution = _resolution(remote=remote)
+    github = RecordingGitHub(token="")
+    fake.upstream.resolve = lambda *args, **kwargs: resolution.model_copy(deep=True)
+    fake.upstream_md = UpstreamMdService()
+    fake.publisher = UpstreamMdPublisher(
+        RecordingWorkspaces(tmp_path / "ws"), github, "a", "a@b",
+    )
+
+    # Without push_only, no token still refuses before anything is pushed.
+    refused = client.post("/api/upstream-md/pr", json={
+        "package": "mstpd", "release": "bookworm", "confirm": True,
+    })
+    assert refused.status_code == 401
+    assert remote.branches() == ["aminor"]
+
+    body = client.post("/api/upstream-md/pr", json={
+        "package": "mstpd", "release": "bookworm", "confirm": True,
+        "push_only": True,
+    }).json()
+
+    assert body["status"] == "BRANCH_PUSHED", body
+    assert remote.branches() == ["aminor", "upstream-metadata/bookworm/mstpd"]
+    assert fake.publisher.workspaces.pushes == [
+        (body["commit"], "upstream-metadata/bookworm/mstpd")]
+    assert "/compare/aminor...upstream-metadata/bookworm/mstpd?quick_pull=1&title=" \
+        in body["pr_create_url"]
+    assert github.created == [] and github.lookups == [] and github.repos == []
+    [entry] = client.get("/api/upstream-md/prs").json()
+    assert entry["pr_create_url"] == body["pr_create_url"]
+
+
+def test_upstream_md_push_only_leaves_a_recorded_pull_request_alone(
+        app_container, md_out, tmp_path):
+    """Push-only over a package whose PR is open: no push, no link, no
+    downgrade of the ledger to BRANCH_PUSHED."""
+    from apm.services.upstream_md_publisher import UpstreamMdPublisher
+    from apm.services.upstream_md_service import UpstreamMdService
+    from test_upstream_md_publisher import (
+        FakeGitHub as RecordingGitHub, FakeWorkspaces as RecordingWorkspaces,
+        Remote, _resolution,
+    )
+
+    client, fake = app_container
+    remote = Remote(tmp_path / "remote")
+    resolution = _resolution(remote=remote)
+    github = RecordingGitHub()
+    fake.upstream.resolve = lambda *args, **kwargs: resolution.model_copy(deep=True)
+    fake.upstream_md = UpstreamMdService()
+    fake.publisher = UpstreamMdPublisher(
+        RecordingWorkspaces(tmp_path / "ws"), github, "a", "a@b",
+    )
+    opened = client.post("/api/upstream-md/pr", json={
+        "package": "mstpd", "release": "bookworm", "confirm": True,
+    }).json()
+    assert opened["status"] == "PR_OPENED"
+
+    for token in ("tok", ""):
+        github.token = token
+        body = client.post("/api/upstream-md/pr", json={
+            "package": "mstpd", "release": "bookworm", "confirm": True,
+            "push_only": True,
+        }).json()
+        assert body["status"] == "PR_OPENED", body
+        assert body["pull_request"]["url"] == opened["pull_request"]["url"]
+        assert body["pr_create_url"] is None
+
+    assert len(fake.publisher.workspaces.pushes) == 1 and len(github.created) == 1
+    [entry] = client.get("/api/upstream-md/prs").json()
+    assert entry["status"] == "PR_OPENED"
+    assert entry["pull_request"]["url"] == opened["pull_request"]["url"]
 
 
 @pytest.mark.parametrize("package", ["babeltrace", "arcapi"])

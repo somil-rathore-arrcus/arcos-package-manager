@@ -162,6 +162,25 @@ upstream_md_publish:
     ONL-xc: >-
       Arrcus/onl-testbed has no debian/ directory; where the file belongs is
       awaiting a decision
+    # The curated GitHub upstream shares no history with these forks: they were
+    # forked from the Debian packaging repository on salsa. Which of the two the
+    # file should name is a person's call. Listed here so a later re-resolution
+    # that marks one VERIFIED still cannot propose it before that call is made.
+    liburcu: >-
+      curated upstream conflict (fork came from the salsa packaging repo);
+      awaiting a human decision - keep excluded until decided
+    lldpd: >-
+      curated upstream conflict (fork came from the salsa packaging repo);
+      awaiting a human decision - keep excluded until decided
+    lttng-tools: >-
+      curated upstream conflict (fork came from the salsa packaging repo);
+      awaiting a human decision - keep excluded until decided
+    lttng-ust: >-
+      curated upstream conflict (fork came from the salsa packaging repo);
+      awaiting a human decision - keep excluded until decided
+    net-snmp: >-
+      curated upstream conflict (fork came from the salsa packaging repo);
+      awaiting a human decision - keep excluded until decided
   # Large repositories, processed after everything else.
   defer:
     - openssl

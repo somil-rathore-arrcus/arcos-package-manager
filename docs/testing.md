@@ -61,8 +61,8 @@ Run inside the container against the data in `out/`:
 
 ```bash
 docker compose exec app python scripts/verify_output.py              # mapping invariants
-docker compose exec app python scripts/verify_upstream_md.py bookworm # files match mapping and plan
-docker compose exec app python scripts/verify_pr_ledger.py bookworm   # ledger invariants (after --apply)
+docker compose exec app python scripts/verify_upstream_md.py bookworm # two fields, match mapping and plan
+docker compose exec app python scripts/verify_pr_ledger.py bookworm   # ledger invariants (after --apply, also --push-only)
 ```
 
 Each ends with `FAILURES: none` when all checks pass.

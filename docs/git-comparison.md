@@ -18,8 +18,9 @@ API: `POST /api/comparison` or `GET /api/comparison/{package}?release=bookworm`
 ([api.md](api.md)).
 
 Every comparison records a snapshot of its headline numbers in
-`out/comparisons/`. The snapshot is what lets `debian/upstream.md` state a real
-backlog instead of a raw count.
+`out/comparisons/`. The snapshot is what lets the `debian/upstream.md` pull
+request body state a real backlog instead of a raw count. The file itself
+records only the upstream source and branch.
 
 ## Version strings are not used
 
@@ -146,8 +147,8 @@ mstpd (bookworm)
 The comparison always fetches both refs. If the upstream ref has moved since
 the mapping was made, it says so. Snapshots are stored per exact pair of
 commits under `out/comparisons/<release>/<package>/`, and are handed to the
-dashboard, the mapping and `debian/upstream.md` only while a resolution still
-names exactly those commits.
+dashboard, the mapping and the `debian/upstream.md` pull request body only
+while a resolution still names exactly those commits.
 
 ## Fetching: blobless for the graph, blobs only when diffing
 

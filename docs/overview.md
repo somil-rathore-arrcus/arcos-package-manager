@@ -13,8 +13,9 @@ know:
 4. How to pull a fix in without breaking the branch.
 
 That knowledge used to live in people's heads. This tool works it out from
-evidence, shows it in a dashboard, and writes it into each package repository
-as `debian/upstream.md`, so the answer travels with the code.
+evidence, shows it in a dashboard, and writes the answer to the first question
+into each package repository as `debian/upstream.md` - `Upstream Source` and
+`Current Upstream Branch` - so it travels with the code.
 
 ## The workflow
 
@@ -27,9 +28,10 @@ ARCoS package
  → git relationship verification       (git merge-base: shared history?)
  → comparison                          (UPSTREAM ^ARCOS and ARCOS ^UPSTREAM)
  → missing / backported / unknown / critical analysis
- → debian/upstream.md                  (rendered from the verified mapping)
+ → debian/upstream.md                  (two fields, rendered from the verified mapping)
  → dry run                             (builds and checks the exact commit, pushes nothing)
- → create branch → push branch → create GitHub PR    (only with --apply and a confirmation)
+ → create branch → push branch → create GitHub PR    (only with --apply and a confirmation;
+                                                      with --push-only, a person opens the PR from a link)
  → review → merge                      (people, on GitHub - never the tool)
 ```
 
@@ -91,7 +93,9 @@ They are never counted as missing.
 - count ARCoS's own commits, or commits already backported, as missing
 - write to a target branch, force-push, merge, or resolve a conflict
 - push or open a pull request without an explicit, confirmed action
-- overwrite a `debian/upstream.md` it did not write
+- write a branch, tag or repository into `debian/upstream.md` that the mapping
+  did not verify (it writes `N/A` and the reason)
+- overwrite a `debian/upstream.md` it does not recognise as its own
 - print or store a secret
 
 ## Two ways to use it

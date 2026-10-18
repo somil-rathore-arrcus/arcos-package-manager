@@ -318,31 +318,36 @@ def _resolution(**overrides):
     return UpstreamResolution(**values)
 
 
-def test_upstream_md_records_the_release_reference_and_labels_raw_counts():
+def test_upstream_md_names_the_release_tag_without_claiming_a_branch():
+    """iproute2 resolves to the tag for the shipped version. The file names the
+    tag and says no branch was verified; the release reference and the raw
+    counts stay out of it - they are evidence for the reviewer."""
+    from apm.services.upstream_md_service import TAG_ONLY, review_flags
+
     text = UpstreamMdService().render(_resolution())
-    assert "## Release reference" in text
-    assert "- Upstream base tag: v6.1.0 (bbbbbbbbbbbb)" in text
-    assert "- Compared against: v6.1.0 (tag, exact_tag)" in text
-    assert "- Verification level: SHARED_HISTORY" in text
-    assert "- Upstream commits not in ARCoS (raw): 0" in text
-    assert "measured aaaaaaaaaaaa..bbbbbbbbbbbb" in text
-    assert "## Backlog" not in text, "no comparison, no backlog claim"
+    assert text == (
+        "Upstream Source: https://git.kernel.org/x/iproute2.git\n\n"
+        "Current Upstream Branch: N/A - no upstream branch verified; "
+        "upstream tag v6.1.0\n"
+    )
+    tag_only = [f for f in review_flags(_resolution()) if f.code == TAG_ONLY]
+    assert tag_only and "v6.1.0 is the tag for the shipped version" in tag_only[0].detail
+    assert "434" not in text and "bbbbbbbbbbbb" not in text
     assert text == UpstreamMdService().render(_resolution()), "deterministic"
 
 
-def test_upstream_md_states_the_backlog_only_from_a_matching_comparison():
+def test_upstream_md_leaves_the_backlog_to_the_pull_request():
     snapshot = ComparisonSnapshot(
         arcos_commit="a" * 40, upstream_repository="https://git.kernel.org/x/iproute2.git",
         upstream_ref="v6.1.0", upstream_commit="b" * 40, base_tag="v6.1.0",
         series="6.1", relevant_upstream=12, definitely_present=3,
         probably_present=1, missing=6, unknown_presence=2, critical_missing=1)
     text = UpstreamMdService().render(_resolution(comparison=snapshot))
-    assert "- Relevant upstream commits: 12" in text
-    assert "- Already present: 4 (definitely 3, probably 1)" in text
-    assert "- Missing: 6" in text and "- Critical/security missing: 1" in text
+    assert text == UpstreamMdService().render(_resolution())
+    assert "Missing" not in text and "Backlog" not in text
 
 
-def test_upstream_md_records_curated_conflicts_and_unapproved_content_matches():
+def test_upstream_md_never_names_the_candidate_of_a_curated_conflict():
     text = UpstreamMdService().render(_resolution(
         status=ResolutionStatus.NEEDS_REVIEW,
         verification_level=VerificationLevel.REF_EXISTS,
@@ -352,10 +357,11 @@ def test_upstream_md_records_curated_conflicts_and_unapproved_content_matches():
         content_match=ContentMatch(base_tag="v1.0", score=0.98, files_compared=50,
                                    files_differing=1),
         behind=None, arcos_only=None, reason="conflict"))
-    assert "- Review reasons: CURATED_CONFLICT, NO_SHARED_HISTORY" in text
-    assert "- Curated conflict: it shares no history" in text
-    assert "- Approved: no - not used for any comparison" in text
-    assert "(raw)" not in text
+    assert text == (
+        "Upstream Source: N/A - not verified (status NEEDS_REVIEW)\n\n"
+        "Current Upstream Branch: N/A - not verified (status NEEDS_REVIEW)\n"
+    )
+    assert "github.com/a/a" not in text and "iproute2.git" not in text
 
 
 # -- J / mapping: full fidelity, snapshots only when they match ----------------

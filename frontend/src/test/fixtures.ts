@@ -223,11 +223,13 @@ export const upstreamMdPublish: PublishResult = {
     ...pullRequest, url: 'https://github.com/Arrcus/pyrad/pull/43',
     head: 'upstream-metadata/bookworm/pyrad',
   },
-  error: null, diff: null, updated_at: null,
+  pr_create_url: null, error: null, diff: null, updated_at: null,
 }
 
 export const upstreamMd: UpstreamMdDocument = {
   package: 'pyrad', debian_release: 'bookworm', path: 'debian/upstream.md',
-  content: '# pyrad\n\n## Upstream\n', outcome: 'CREATED',
+  content: 'Upstream Source: https://github.com/wichert/pyrad.git\n\n'
+    + 'Current Upstream Branch: master\n',
+  outcome: 'CREATED',
   existing_content: null, diff: null, local_path: null,
 }

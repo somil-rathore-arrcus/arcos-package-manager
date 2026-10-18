@@ -57,8 +57,9 @@ docker compose exec app python scripts/verify_upstream_md.py bookworm
 docker compose exec app apm publish-upstream-md --release bookworm --all  # dry run
 ```
 
-Order matters: comparisons before generation, generation (without
-`--package`) before publishing.
+Order matters: generation (without `--package`) before publishing.
+Comparisons are optional and can run any time before publishing: they add
+the backlog to the pull request body and do not change the file.
 
 ## Logs
 
@@ -73,6 +74,7 @@ contains a secret.
 |---|---|---|
 | Results ledger - the record of every branch and PR the tool created | `out/upstream-md-pr-results-*.{json,md}` | **Yes - never edit or delete** |
 | Content-base approvals | `out/approvals.yaml` | **Yes** |
+| Push-only links | `out/upstream-md-pr-links-*.md` | Useful; the next push-only apply rewrites the file from the results ledger without pushing anything already pushed |
 | Mapping, plan, generated files, snapshots | rest of `out/` | Useful; can be regenerated |
 | `.env` | checkout directory | Keep a private copy of the non-secret values; the token can be re-issued |
 | Git clones | workspace directory | No - regenerable |

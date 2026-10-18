@@ -8,9 +8,12 @@ branch/commit plan is written beside them. Nothing is pushed and no pull request
 is opened: this command has no write access to any remote and does not ask for
 a GitHub token.
 
-Each file is rendered from the SAME verified resolution the mapping and the
-dashboard use, so the record committed to a package repository cannot disagree
-with what the tool says.
+Each file holds two fields - "Upstream Source" and "Current Upstream Branch" -
+rendered from the SAME verified resolution the mapping and the dashboard use, so
+the record committed to a package repository cannot disagree with what the tool
+says. A value that was not verified is written as N/A with the reason, and the
+packages a person should look at (a tag but no branch, a fallback ref, mapping
+warnings) are listed after the run and in the plan. Flags never stop a package.
 """
 
 from __future__ import annotations
@@ -86,6 +89,17 @@ def run(release: str = "bookworm", branch: str = "", out_dir: Path = None,
     print(f"\n  {'generated':<12} {len(result.entries)}")
     print(f"  {'skipped':<12} {len(result.skipped)}")
 
+    flagged = result.flagged
+    if flagged:
+        # Codes only here; the plan has the detail behind each one.
+        print(f"\nFlagged for review ({len(flagged)}) - check before merging; "
+              f"a flag does not block publishing:\n")
+        width = max(len(e.package) for e in flagged)
+        for entry in flagged:
+            print(f"  {entry.package:<{width}}  "
+                  f"{', '.join(f['code'] for f in entry.flags)}")
+        print(f"\n  The detail behind each code: {plan['markdown']}")
+
     unreadable = [e.package for e in result.entries if e.existing_unknown]
     if unreadable:
         print(
@@ -117,8 +131,9 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--include-needs-review", action="store_true",
         help=(
-            "also write a file for NEEDS_REVIEW packages. It records the status "
-            "and the reason; it never invents an upstream."
+            "also write a file for NEEDS_REVIEW packages. Both fields then read "
+            "'N/A - not verified (status NEEDS_REVIEW)'; the candidate upstream "
+            "is never written."
         ),
     )
     parser.add_argument(

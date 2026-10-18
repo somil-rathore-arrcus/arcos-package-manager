@@ -6,8 +6,8 @@ from the code, is at `http://<server-ip>:8080/docs`; the schema at
 
 The API has **no authentication of its own** - see
 [deployment.md → Access control](deployment.md#access-control). Endpoints that
-push or open pull requests need `APM_GITHUB_TOKEN` on the server and an
-explicit flag in the request.
+push need an explicit flag in the request and push with the server's SSH key;
+opening a pull request also needs `APM_GITHUB_TOKEN` on the server.
 
 ## Errors
 
@@ -49,7 +49,7 @@ Every handled error is JSON with a code the dashboard renders differently:
 | POST | `/api/pull-requests` | Open a PR for a pushed patch branch | **opens a PR** |
 | GET | `/api/pull-requests/{number}` | Look up a PR | - |
 | POST | `/api/upstream-md/generate` | Render `debian/upstream.md` | optional local file |
-| POST | `/api/upstream-md/pr` | Propose it (dry run or real) | **pushes and opens a PR with `confirm: true`** |
+| POST | `/api/upstream-md/pr` | Propose it (dry run or real) | **pushes and opens a PR with `confirm: true`; pushes only, with `push_only: true`** |
 | GET | `/api/upstream-md/prs` | The publish results ledger | - |
 | GET | `/api/reports` | Generated reports on disk | - |
 | GET | `/api/reports/{name}` | Download one | - |
@@ -188,25 +188,38 @@ Returns the PR, or the one already open for that branch.
 {"package": "mstpd", "release": "bookworm", "arcos_branch": null, "write_local": false}
 ```
 
-→ `content`, `outcome` (`CREATED`, `UPDATED`, `NO_CHANGE`, `CONFLICT`),
-`diff`, `existing_content`. 400 for a `NO_UPSTREAM` package.
+→ `content` (the two-field file: `Upstream Source` and
+`Current Upstream Branch`), `outcome` (`CREATED`, `UPDATED`, `NO_CHANGE`,
+`CONFLICT`), `diff`, `existing_content`. 400 for a `NO_UPSTREAM` package.
 
 **`POST /api/upstream-md/pr`**
 
 ```json
 {"package": "mstpd", "release": "bookworm", "arcos_branch": null,
- "branch_name": null, "draft": false, "dry_run": true, "confirm": false}
+ "branch_name": null, "draft": false, "dry_run": true, "confirm": false,
+ "push_only": false}
 ```
 
 - `dry_run: true` - builds and checks the exact commit; nothing is pushed.
 - `confirm: true` (and `dry_run: false`) - pushes the branch and opens the PR.
   Pre-flight first: 401 `AUTH_REQUIRED` without a usable token.
-- Neither - refused (400). A package that is not `VERIFIED` - refused (400).
+- `confirm: true` and `push_only: true` - pushes the branch and opens no PR;
+  needs no token, so there is no token pre-flight. The result is
+  `BRANCH_PUSHED` with `pr_create_url`, GitHub's pre-filled page to open the
+  PR from. With `dry_run: true` as well, the result is `DRY_RUN_OK` with the
+  link the push would give. For a package the ledger records with a pull
+  request (`PR_OPENED`, `PR_EXISTS`, `PR_MERGED`, `PR_CLOSED`), push-only
+  pushes nothing and returns that record unchanged.
+- Neither `dry_run` nor `confirm` - refused (400). A package that is not
+  `VERIFIED` - refused (400).
 - `branch_name` must be under `upstream-metadata/` and differ from the target.
 
-Returns one publish result (status, branch, commit, base SHA, PR, error). A
-real run is recorded in `out/upstream-md-pr-results-<release>.json`; a dry run
-over the API is not recorded.
+Returns one publish result (status, branch, commit, base SHA, PR,
+`pr_create_url`, error). A real run - push-only included - is recorded in
+`out/upstream-md-pr-results-<release>.json`, except that a result which pushed
+nothing never replaces the record of a branch a push-only run pushed
+(`BRANCH_PUSHED`); a dry run over the API is not recorded. The API writes no links file: the PR body is in the link, or comes
+from a CLI run ([upstream-md-publishing.md](upstream-md-publishing.md#the-links-file)).
 
 **`GET /api/upstream-md/prs?release=bookworm`** → the results ledger entries.
 

@@ -7,6 +7,9 @@ Invariants that must hold whatever happened during the run:
   - every branch the tool created is under upstream-metadata/
   - no recorded branch is the branch it targets
   - every PR_OPENED / PR_EXISTS entry has a pushed commit and a PR URL
+  - every BRANCH_PUSHED entry (a push-only run) was pushed, names a full
+    commit, links to GitHub's compare page for exactly its own repository,
+    base and branch, and records no pull request - none was opened
   - every pushed entry names a full commit SHA
 
 It also reports how many of the plan's packages the ledger accounts for; a
@@ -56,6 +59,22 @@ def main(release: str) -> int:
     ]
     check("every open PR has a pushed commit and a URL", not incomplete,
           ", ".join(incomplete))
+
+    # Push-only: the branch exists and a person opens the PR from the link, so
+    # the link must lead to this branch and nothing may claim a PR exists.
+    pushed_only = [e for e in entries if e["status"] == "BRANCH_PUSHED"]
+    bad_push = [
+        e["package"] for e in pushed_only
+        if not e.get("pushed")
+        or not re.fullmatch(r"[0-9a-f]{40}", e.get("commit") or "")
+        or not (e.get("pr_create_url") or "").startswith(
+            f"https://github.com/{e.get('repository')}/compare/"
+            f"{e.get('base_branch')}...{e.get('branch')}?"
+        )
+        or (e.get("pull_request") or {}).get("url")
+    ]
+    check("every pushed-only branch has its commit and its own PR link, and no PR",
+          not bad_push, ", ".join(bad_push))
     bad_sha = [e["package"] for e in entries if e.get("pushed")
                and not re.fullmatch(r"[0-9a-f]{40}", e.get("commit") or "")]
     check("every pushed entry names a full commit", not bad_sha,

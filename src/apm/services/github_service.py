@@ -7,25 +7,36 @@ its own initiative.
 
 Reading private repositories works over SSH without a token; only the REST API
 needs one, so the absence of a token degrades to "cannot open PRs" rather than
-breaking the application.
+breaking the application. Where a branch can be pushed but no token exists,
+pull_request_link gives the page a person opens the pull request from instead.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple
+from urllib.parse import quote, urlencode
 
 import httpx
 
-from ..domain.enums import ErrorCode
+from ..domain.enums import ErrorCode, UpstreamMdOutcome
 from ..domain.models import (
     CherryPickResult, ComparisonResult, PullRequest, UpstreamResolution,
+)
+from .upstream_md_service import (
+    BRANCH_LABEL, SOURCE_LABEL, UPSTREAM_MD_PATH, UpstreamMdService,
+    branch_field, review_flags, source_field,
 )
 
 log = logging.getLogger(__name__)
 
 _REPO = re.compile(r"github\.com[:/]+([^/]+)/([^/]+?)(?:\.git)?/?$", re.IGNORECASE)
+
+# GitHub answers a request line much past 8 KB with an error page instead of the
+# form, so a body that would take a link past this is left out of it. Whoever
+# opens the link pastes the body from the links file instead.
+PR_LINK_MAX_LENGTH = 8000
 
 
 class GitHubError(RuntimeError):
@@ -39,6 +50,40 @@ def repo_slug(url: str) -> Optional[str]:
     """owner/name from any spelling of a GitHub URL."""
     match = _REPO.search(url or "")
     return f"{match.group(1)}/{match.group(2)}" if match else None
+
+
+def pull_request_link(slug: str, base: str, head_branch: str, title: str = "",
+                      body: str = "", web_url: str = "https://github.com",
+                      max_length: int = PR_LINK_MAX_LENGTH) -> Tuple[str, bool]:
+    """GitHub's "open a pull request" page for a pushed branch, pre-filled.
+
+    Needs no token: the link only fills in the form, and the person who opens
+    it creates the pull request with their own access. Returns the link and
+    whether the body is in it. A body too long for a URL is left out whole
+    (False) rather than cut short, so a description is never half there.
+    """
+    # "/" stays literal in branch names: that is how GitHub spells them in a
+    # compare URL, and how verify_pr_ledger.py expects to find them.
+    compare = (f"{web_url.rstrip('/')}/{slug}/compare/"
+               f"{quote(base, safe='/')}...{quote(head_branch, safe='/')}")
+    params = [("quick_pull", "1")]
+    if title:
+        params.append(("title", title))
+    without_body = f"{compare}?{urlencode(params, quote_via=quote)}"
+    if not body:
+        return without_body, True
+    link = f"{compare}?{urlencode(params + [('body', body)], quote_via=quote)}"
+    if len(link) > max_length:
+        return without_body, False
+    return link, True
+
+
+def bare_pull_request_link(link: Optional[str]) -> str:
+    """`link` without its title and body: short enough for a table, and still
+    the page the pull request is opened from."""
+    if not link:
+        return ""
+    return link.split("?", 1)[0] + "?quick_pull=1"
 
 
 class GitHubService:
@@ -258,18 +303,27 @@ def build_patch_pr_body(resolution: UpstreamResolution,
 
 
 def build_upstream_md_pr_body(resolution: UpstreamResolution,
-                              base_sha: Optional[str] = None) -> str:
+                              base_sha: Optional[str] = None,
+                              content: Optional[str] = None,
+                              outcome: Optional[UpstreamMdOutcome] = None) -> str:
     """The PR description for a debian/upstream.md proposal.
 
     ARCoS CI (.github/workflows/description.yml) rejects a PR whose body lacks
     "Problem Description :", "Root Cause :" and "Fix Details :", each with some
     text after it - so those three come first, spelled exactly that way.
+
+    The file holds two values; the evidence behind them, and what a reviewer
+    should check before merging, are written here instead. `content` is the
+    file as committed, rendered from the resolution when not given.
     """
+    if content is None:
+        content = UpstreamMdService().render(resolution)
     upstream = resolution.upstream_repository
     ref = resolution.upstream_branch or resolution.upstream_tag or \
         resolution.upstream_ref or "N/A"
     commit = (resolution.upstream_commit or "")[:12]
     base = (base_sha or resolution.arcos_commit or "")[:12]
+    verb = "Updates" if outcome is UpstreamMdOutcome.UPDATED else "Adds"
     lines = [
         "Problem Description :",
         f"The ARCoS fork of {resolution.package} does not record which upstream "
@@ -282,11 +336,18 @@ def build_upstream_md_pr_body(resolution: UpstreamResolution,
         "package repository itself.",
         "",
         "Fix Details :",
-        "Adds debian/upstream.md, generated from the verified mapping. No other "
+        f"{verb} {UPSTREAM_MD_PATH}, which records the upstream source and the "
+        "current upstream branch, taken from the verified mapping. No other "
         "file changes; debian/rules, debian/control and the build are untouched.",
+        "",
+        "```text",
+        content.rstrip("\n"),
+        "```",
         "",
         "| | |",
         "|---|---|",
+        f"| {SOURCE_LABEL} | {source_field(resolution)} |",
+        f"| {BRANCH_LABEL} | {branch_field(resolution).value} |",
         f"| ARCoS commit | {base or 'N/A'} ({resolution.arcos_branch or 'N/A'}) |",
         f"| Debian release | {resolution.debian_release} |",
         f"| Upstream repository | {upstream.url if upstream else 'N/A'} |",
@@ -323,9 +384,12 @@ def build_upstream_md_pr_body(resolution: UpstreamResolution,
             f"present; {snapshot.missing} missing; {snapshot.unknown_presence} "
             f"unknown; {snapshot.critical_missing} critical/security missing |"
         )
-    if resolution.warnings:
-        lines += ["", "Warnings recorded with the mapping:", ""]
-        lines += [f"- {w}" for w in resolution.warnings]
+    # The mapping's own warnings are one of the flags, so they are listed here
+    # once rather than in a section of their own as well.
+    flags = review_flags(resolution)
+    if flags:
+        lines += ["", "Review notes :", ""]
+        lines += [f"- `{flag.code}`: {flag.detail}" for flag in flags]
     lines += ["", "Generated by the ARCoS Package Manager."]
     return "\n".join(lines)
 

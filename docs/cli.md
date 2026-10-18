@@ -22,7 +22,7 @@ Options shown as *repeatable* may be given more than once
 | [`compare`](#compare) | Full comparison; records the snapshot | `out/comparisons/` | reads only |
 | [`approve-content-base`](#approve-content-base) | Record a person's approval of a content match | `out/approvals.yaml` | reads only |
 | [`generate-upstream-md`](#generate-upstream-md) | Render `debian/upstream.md` + the PR plan | `out/upstream-md/`, plan | reads only |
-| [`publish-upstream-md`](#publish-upstream-md) | Propose the files as PRs | ledgers | **pushes and opens PRs only with `--apply`** |
+| [`publish-upstream-md`](#publish-upstream-md) | Propose the files as PRs | ledgers, links file (`--push-only`) | **pushes and opens PRs only with `--apply`; pushes only, with `--apply --push-only`** |
 | [`doctor`](#doctor) | Check storage, git and GitHub access | nothing | reads only |
 
 ## discover
@@ -90,8 +90,9 @@ Resolves the catalogue (all releases, or `--release`, repeatable) into
 apm compare [--release RELEASE] --package PACKAGE [--refresh]
 ```
 
-Runs the full comparison for each package and records the snapshot that
-`debian/upstream.md` uses for its Backlog section. Prints the summary
+Runs the full comparison for each package and records the snapshot that the
+`debian/upstream.md` pull request body uses for its backlog row (the file
+itself does not change). Prints the summary
 described in [git-comparison.md](git-comparison.md#reading-the-result).
 Exit code 1 if any package failed.
 
@@ -132,16 +133,19 @@ apm generate-upstream-md [--release RELEASE] [--branch BRANCH] [--package PACKAG
                          [--out-dir OUT_DIR] [--include-needs-review] [--offline]
 ```
 
-Renders `debian/upstream.md` for the release from the mapping, compares it with
-each fork (read-only) and writes the files and the plan. Nothing remote is
-written. See [upstream-md.md](upstream-md.md).
+Renders `debian/upstream.md` - the two fields `Upstream Source` and
+`Current Upstream Branch` - for the release from the mapping, compares it with
+each fork (read-only) and writes the files and the plan. After the summary it
+lists the packages with review flags (`Flagged for review (N) ...`, codes only;
+the plan has the detail). Nothing remote is written. See
+[upstream-md.md](upstream-md.md).
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--release` | `bookworm` | The release |
 | `--branch` | all | Only packages on this ARCoS branch (`aminor`) |
 | `--package` | all | Repeatable. **Replaces the plan with only these packages** |
-| `--include-needs-review` | | Also write files for `NEEDS_REVIEW` packages |
+| `--include-needs-review` | | Also write files for `NEEDS_REVIEW` packages; both fields read `N/A - not verified (status NEEDS_REVIEW)` |
 | `--offline` | | Do not read the forks; outcomes become guesses |
 | `--out-dir` | `out/` | Output directory |
 
@@ -154,23 +158,34 @@ docker compose exec app apm generate-upstream-md --release bookworm --branch ami
 ```
 apm publish-upstream-md [--release RELEASE] [--out-dir OUT_DIR] [--plan PLAN]
                         [--package PACKAGE | --all] [--dry-run | --apply]
-                        [--confirm CONFIRM] [--confirm-count CONFIRM_COUNT] [--draft]
+                        [--confirm CONFIRM] [--confirm-count CONFIRM_COUNT]
+                        [--push-only] [--draft]
                         [--title-prefix TITLE_PREFIX] [--limit LIMIT]
                         [--stop-after-failures STOP_AFTER_FAILURES]
                         [--retry-failed] [--recheck] [--exclude EXCLUDE] [--show-diff]
 ```
 
-A dry run unless `--apply`. Every option, the confirmation rules, the statuses
-and the ledgers are in
+A dry run unless `--apply`. `--push-only` with `--apply` pushes the branches
+but opens no pull request and needs no token: each package ends
+`BRANCH_PUSHED`, and `out/upstream-md-pr-links-<release>.md` is rewritten with
+the link to open the PR of every branch still waiting for one. A later
+push-only run leaves `BRANCH_PUSHED` packages alone, so `--limit` moves on;
+a run with a token opens their PRs. Without `--apply`, `--push-only` is a dry
+run that writes the links it would give to
+`out/upstream-md-pr-links-dryrun-<release>.md`. Every option, the confirmation
+rules, the statuses and the ledgers are in
 [upstream-md-publishing.md](upstream-md-publishing.md).
 
 ```bash
 docker compose exec app apm publish-upstream-md --release bookworm --package mstpd --show-diff
 docker compose exec app apm publish-upstream-md --release bookworm --package mstpd --apply --confirm mstpd
+docker compose exec app apm publish-upstream-md --release bookworm --package mstpd --push-only --show-diff
+docker compose exec app apm publish-upstream-md --release bookworm --package mstpd --apply --push-only --confirm mstpd
 ```
 
 Exit codes: 0 success; 1 a package failed (or no plan / no packages named);
-2 refused before pushing (confirmation mismatch, no token, pre-flight failure).
+2 refused before pushing (confirmation mismatch, no token without
+`--push-only`, pre-flight failure).
 
 ## doctor
 
@@ -200,8 +215,8 @@ Run inside the container with `docker compose exec app python scripts/<name>`:
 | Script | Checks |
 |---|---|
 | `verify_output.py [csv]` | Invariants of the produced mapping (e.g. a kernel series matching its Debian version) |
-| `verify_upstream_md.py [release]` | The generated `debian/upstream.md` files still match the mapping and the plan's hashes |
-| `verify_pr_ledger.py [release]` | The results ledger records nothing the workflow may never do |
+| `verify_upstream_md.py [release]` | Each generated `debian/upstream.md` is exactly the two fields, its values match the mapping, and the plan records the same values, flags and hashes ([checks](upstream-md.md#what-the-verifier-checks)) |
+| `verify_pr_ledger.py [release]` | The results ledger records nothing the workflow may never do, and every `BRANCH_PUSHED` entry links to its own branch and records no PR |
 
 Development scripts (host, no Docker): `setup-venv.sh`, `build-frontend.sh`,
 `server.sh start|stop|restart|status|logs`, `dev-backend.sh`,

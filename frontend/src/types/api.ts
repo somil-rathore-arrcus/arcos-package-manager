@@ -380,12 +380,14 @@ export interface PublishResult {
   pushed: boolean
   title: string
   pull_request: PullRequest | null
+  /** GitHub's pre-filled 'open a pull request' page for this branch. Set by push-only runs and their dry runs, which open no pull request themselves. */
+  pr_create_url: string | null
   error: string | null
   diff: string | null
   updated_at: string | null
 }
 
-export type PublishStatus = "DRY_RUN_OK" | "PR_OPENED" | "PR_EXISTS" | "PR_MERGED" | "PR_CLOSED" | "NO_CHANGE" | "SKIPPED_NO_UPSTREAM" | "SKIPPED_NEEDS_REVIEW" | "SKIPPED_EXCLUDED" | "CONFLICT" | "DRIFT" | "BRANCH_EXISTS" | "BASE_UNREADABLE" | "PUSH_FAILED" | "PR_FAILED" | "ERROR"
+export type PublishStatus = "DRY_RUN_OK" | "BRANCH_PUSHED" | "PR_OPENED" | "PR_EXISTS" | "PR_MERGED" | "PR_CLOSED" | "NO_CHANGE" | "SKIPPED_NO_UPSTREAM" | "SKIPPED_NEEDS_REVIEW" | "SKIPPED_EXCLUDED" | "CONFLICT" | "DRIFT" | "BRANCH_EXISTS" | "BASE_UNREADABLE" | "PUSH_FAILED" | "PR_FAILED" | "ERROR"
 
 export interface PullRequest {
   number?: number | null
@@ -534,6 +536,8 @@ export interface UpstreamMdPrRequest {
   dry_run?: boolean
   /** Must be true. Opening a pull request is an explicit act, never a side effect of generating the file. */
   confirm?: boolean
+  /** Push the branch but open no pull request: the result is BRANCH_PUSHED with pr_create_url, GitHub's page to open it from. Needs no GitHub token; still needs confirm=true unless dry_run. */
+  push_only?: boolean
 }
 
 export interface UpstreamMdRequest {

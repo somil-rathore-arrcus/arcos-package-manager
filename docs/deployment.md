@@ -42,7 +42,7 @@ Edit `.env` with an editor. For a first start, set:
 | `APM_GIT_SSH_KEY_FILE` | the **host path** of the private key, e.g. `/home/<user>/.ssh/id_ed25519` |
 | `APM_WORKSPACE_HOST_DIR` | a host directory with several GB free for git clones (default `./workspace`) |
 | `APM_COMMITTER_NAME`, `APM_COMMITTER_EMAIL` | the person accountable for the commits the tool creates |
-| `APM_GITHUB_TOKEN` | leave **empty** for now - the application then runs read-only |
+| `APM_GITHUB_TOKEN` | leave **empty** for now - the application then runs read-only (`publish-upstream-md --push-only` can still push branches with the SSH key) |
 
 `APM_GIT_BACKEND=local` (already in `.env.example`) makes git run inside the
 container with that key. Every variable is described in
@@ -167,8 +167,9 @@ is never written: `discover` writes the package catalogue to
 ## Access control
 
 The dashboard and the API have **no login**. Anyone who can reach port 8080
-can use them - including, once a token is configured, the endpoints that push
-branches and open pull requests. Keep the port reachable only from the
+can use them - including the endpoints that push branches with the server's
+SSH key (no token needed, e.g. `POST /api/upstream-md/pr` with
+`push_only: true`) and, once a token is configured, open pull requests. Keep the port reachable only from the
 network that should use it:
 
 - `APM_BIND_ADDRESS=127.0.0.1` in `.env` publishes the port on the host's

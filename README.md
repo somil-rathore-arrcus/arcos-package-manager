@@ -17,8 +17,8 @@ Debian archive underneath. No database. Runs as one Docker container.
 | Compare | ARCoS vs upstream from the commit graph | Missing, already present/backported, unknown, ARCoS-specific commits |
 | Assess | Criticality from evidence only (CVE, advisory, Debian security patch, OSV.dev) | `CRITICAL`, `STABLE_RELEVANT`, `NORMAL`, `UNKNOWN` |
 | Preview | Tries selected upstream patches in a throwaway workspace | Clean or conflict report; nothing written |
-| Record | Renders `debian/upstream.md` from the verified mapping | Files + a branch/commit plan |
-| Publish | Dry run, then one branch and one PR per eligible package | PRs against the ARCoS package repositories + a results ledger |
+| Record | Renders `debian/upstream.md` - `Upstream Source` and `Current Upstream Branch`, nothing else - from the verified mapping | Files + a branch/commit plan with review flags |
+| Publish | Dry run, then one branch and one PR per eligible package - or, without a token, the branch and a link to open the PR | PRs against the ARCoS package repositories + a results ledger |
 
 ## Quick start (Docker)
 
@@ -39,7 +39,9 @@ Open `http://<server-ip>:8080/`.
 
 Without `APM_GITHUB_TOKEN` the application is **read-only**: everything works -
 mapping, comparison, `upstream.md` generation, dry runs - except opening pull
-requests. See [docs/authentication.md](docs/authentication.md).
+requests. `publish-upstream-md --apply --push-only` still pushes the branches
+with the SSH key and prints a link for a person to open each PR. See
+[docs/authentication.md](docs/authentication.md).
 
 ## Everyday commands
 
@@ -56,11 +58,15 @@ Run from the checkout directory on the server.
 | Refresh the Bookworm mapping | `docker compose exec app apm resolve-release --release bookworm` |
 | Generate `debian/upstream.md` | `docker compose exec app apm generate-upstream-md --release bookworm --branch aminor` |
 | Dry-run one PR | `docker compose exec app apm publish-upstream-md --release bookworm --package mstpd` |
+| Push one branch, no token (PR opened from the link) | `docker compose exec app apm publish-upstream-md --release bookworm --package mstpd --apply --push-only --confirm mstpd` |
 
 ## Safety rules (enforced by the code)
 
 - An upstream is never guessed: every repository is contacted, and only shared
   history (or a content match a person approved) makes a package `VERIFIED`.
+- `debian/upstream.md` writes only recorded facts. A branch that was not
+  verified is written as `N/A` with the reason - for a tag-only upstream,
+  `N/A - no upstream branch verified; upstream tag <tag>` - never a guess.
 - Only `VERIFIED` packages are ever proposed. `NEEDS_REVIEW`, `NO_UPSTREAM` and
   `FAILED` never are.
 - PRs go to the **ARCoS package repositories** (e.g. `Arrcus/mstpd`, branch
@@ -68,8 +74,9 @@ Run from the checkout directory on the server.
 - The target branch is never written to, nothing is force-pushed, nothing is
   merged by the tool, and each commit changes exactly `debian/upstream.md`.
 - Publishing is a dry run unless `--apply` is given with a confirmation that
-  names what will be pushed.
-- A `debian/upstream.md` this tool did not write is never overwritten.
+  names what will be pushed - with or without `--push-only`.
+- A `debian/upstream.md` the tool does not recognise as its own (anything but
+  the two fields, or an older version's file) is never overwritten.
 - No secret is stored in the repository or the image, or printed in logs.
 
 ## Documentation
@@ -89,8 +96,10 @@ Start with [docs/README.md](docs/README.md). The most-used pages:
 
 ## What happens next
 
-The deployment is ready and read-only. The remaining steps - the token owner adds
-`APM_GITHUB_TOKEN`, the first real PR is created for `mstpd`, and after it is
-reviewed the remaining eligible packages follow - are written out command by
-command in
+The deployment is ready and read-only. The remaining steps - deploy this
+version, regenerate the two-field files and review the flagged packages, push
+the `mstpd` branch with `--push-only` for Lakshya to open its PR from the link,
+and after it is reviewed the remaining eligible packages in batches of five (or
+the same with a token, if one is added) - are written out command by command
+in
 [docs/production-handoff.md → What happens next](docs/production-handoff.md#what-happens-next).

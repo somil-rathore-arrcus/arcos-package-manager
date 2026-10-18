@@ -8,6 +8,17 @@ starts.
 
 Rewritten atomically after every package: a run that dies half way leaves a
 ledger that is correct for every package it reached.
+
+The record of a branch a push-only run pushed is never replaced by a result
+that only says what a later run did (see supersedes): that branch can wait days
+for a person, and losing its commit would make the tool's own branch look like
+someone else's. Every other record is replaced by the next result, as it
+always was.
+
+A push-only run's entries are BRANCH_PUSHED. The JSON keeps the full link to
+open each pull request (pr_create_url); the Markdown table shows the page
+without the pre-filled title and description, which belong in the links file
+rather than in a table cell.
 """
 
 from __future__ import annotations
@@ -22,8 +33,44 @@ from typing import Dict, Iterable, List, Optional
 
 from ..domain.enums import PublishStatus
 from ..domain.models import PublishResult
+from .github_service import bare_pull_request_link
 
 log = logging.getLogger(__name__)
+
+
+# A pull request exists for the branch: opened or found by this tool, merged, or
+# closed by a reviewer.
+_PULL_REQUEST_RECORDS = (
+    PublishStatus.PR_OPENED, PublishStatus.PR_EXISTS, PublishStatus.PR_MERGED,
+    PublishStatus.PR_CLOSED,
+)
+
+
+def supersedes(result: PublishResult,
+               previous: Optional[PublishResult]) -> bool:
+    """Whether `result` may replace `previous` as a package's record.
+
+    Only a BRANCH_PUSHED record with its commit is guarded. It gives way to a
+    pull request answer, to a result that itself carries a pushed commit, or to
+    NO_CHANGE - the branch is gone and the target already has the file.
+    Anything else (DRIFT from an upstream move, an exclusion, an error, a
+    package no longer eligible) describes one run, not what exists, so the
+    record stands and a later run still recognises the branch as its own
+    instead of reporting it as BRANCH_EXISTS.
+
+    Every other record - a pull request's or PR_FAILED's included - gives way
+    to the next result, as it did before push-only existed: a run that never
+    meets a BRANCH_PUSHED record writes exactly what it always wrote.
+    """
+    if previous is None or previous.status is not PublishStatus.BRANCH_PUSHED:
+        return True
+    if not (previous.pushed and previous.commit):
+        return True
+    return (
+        result.status in _PULL_REQUEST_RECORDS
+        or (result.pushed and bool(result.commit))
+        or result.status is PublishStatus.NO_CHANGE
+    )
 
 
 def ledger_paths(out_dir: Path, release: str, dry_run: bool = False):
@@ -76,17 +123,27 @@ class PublishLedger:
 
     # -- writing -----------------------------------------------------------
 
-    def record(self, result: PublishResult) -> None:
-        result.updated_at = datetime.now(timezone.utc).replace(microsecond=0)
-        self._entries[result.package] = result
-        self.save()
+    def record(self, result: PublishResult) -> bool:
+        """Write `result` down, unless the existing record outranks it (see
+        supersedes). Returns whether it was written."""
+        return self.record_all([result]) == 1
 
-    def record_all(self, results: Iterable[PublishResult]) -> None:
+    def record_all(self, results: Iterable[PublishResult]) -> int:
+        """record() for many, saved once. Returns how many were written."""
         now = datetime.now(timezone.utc).replace(microsecond=0)
+        written = 0
         for result in results:
+            previous = self._entries.get(result.package)
+            if not supersedes(result, previous):
+                log.info("%s: keeping the recorded %s over this run's %s",
+                         result.package, previous.status.value,
+                         result.status.value)
+                continue
             result.updated_at = now
             self._entries[result.package] = result
+            written += 1
         self.save()
+        return written
 
     def save(self) -> None:
         counts: Dict[str, int] = {}
@@ -110,7 +167,12 @@ class PublishLedger:
             "|---|---|---|---|---|---|",
         ]
         for e in self.entries():
-            url = e.pull_request.url if e.pull_request and e.pull_request.url else ""
+            if e.pull_request and e.pull_request.url:
+                url = e.pull_request.url
+            elif e.status is PublishStatus.BRANCH_PUSHED:
+                url = bare_pull_request_link(e.pr_create_url)
+            else:
+                url = ""
             error = (e.error or "").replace("|", "\\|").replace("\n", " ")
             lines.append(
                 f"| {e.package} | {e.status.value} | {e.branch} | "
