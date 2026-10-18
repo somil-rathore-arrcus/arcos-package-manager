@@ -521,6 +521,8 @@ export interface UpstreamMdDocument {
   existing_content: string | null
   diff: string | null
   local_path: string | null
+  /** The same flags the plan and the pull request body carry. None of them blocks publishing. */
+  review_flags: UpstreamMdReviewFlag[]
 }
 
 export type UpstreamMdOutcome = "CREATED" | "UPDATED" | "NO_CHANGE" | "CONFLICT"
@@ -546,6 +548,11 @@ export interface UpstreamMdRequest {
   arcos_branch?: string | null
   /** Also write the file under the local output directory. */
   write_local?: boolean
+}
+
+export interface UpstreamMdReviewFlag {
+  code: string
+  detail: string
 }
 
 export interface UpstreamResolution {

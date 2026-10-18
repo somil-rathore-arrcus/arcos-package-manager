@@ -144,8 +144,10 @@ permissions; the right to open a PR is proven by the first real PR.
 ### Without a token
 
 - `/api/health` reports `"read_only": true` - meaning the tool cannot open a
-  pull request. The dashboard says so and disables the buttons that would push
-  or open a PR.
+  pull request. The dashboard says so and hides the buttons that would open a
+  PR or push a patch branch. For `debian/upstream.md` it offers **Dry run** and,
+  after a clean one, **Push branch (no PR)**, which pushes with the SSH key and
+  links GitHub's form to open the PR from.
 - `apm publish-upstream-md --apply` stops before pushing:
   `APM_GITHUB_TOKEN is not set, so no pull request could be opened. Nothing was pushed.`
 - `apm publish-upstream-md --apply --push-only` pushes the branches anyway,

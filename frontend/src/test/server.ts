@@ -12,6 +12,7 @@ export interface Overrides {
   cherryPick?: unknown
   pullRequest?: unknown
   upstreamMd?: unknown
+  /** A value, or a function of the request body (dry run and push differ). */
   upstreamMdPr?: unknown
   reports?: unknown
 }
@@ -69,7 +70,8 @@ export function mockApi(overrides: Overrides = {}) {
       return pick(overrides.upstreamMd, fx.upstreamMd)
     }
     if (path.startsWith('/upstream-md/pr')) {
-      return pick(overrides.upstreamMdPr, fx.upstreamMdPublish)
+      const value = overrides.upstreamMdPr
+      return pick(typeof value === 'function' ? value(body) : value, fx.upstreamMdPublish)
     }
     if (path.startsWith('/reports')) return pick(overrides.reports, fx.reports)
     return respond({ code: 'NOT_FOUND', message: `no stub for ${path}` }, 404)

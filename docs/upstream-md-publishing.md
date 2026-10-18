@@ -387,13 +387,20 @@ open a pull request in `--push-only` mode.
 
 ## From the dashboard or the API
 
-After **Generate**, the dashboard's **debian/upstream.md** card shows
-**Create pull request** unless the outcome is `NO_CHANGE`; the button is
-enabled only when a token is configured. It calls `POST /api/upstream-md/pr`
-with `confirm: true` - **a real push and PR, at once**, through the same
-publisher (which still refuses a `CONFLICT`). The dashboard has no push-only
-button. The CLI path, with its dry run and confirmation, is the recommended
-way.
+After **Generate**, the dashboard's **debian/upstream.md** card shows the file,
+its outcome and its review flags, and - unless the outcome is `NO_CHANGE` -
+these buttons, all through the same publisher as the CLI (which still refuses
+a `CONFLICT`, an exclusion and anything not `VERIFIED`):
+
+| Button | Shown | What it does |
+|---|---|---|
+| **Dry run** | always | `dry_run: true` (and `push_only: true` without a token): every read and check, then stops. Shows the repository, target branch, branch, base commit and title. Nothing is pushed |
+| **Create pull request** | with a token | `confirm: true` - **a real push and PR, at once** |
+| **Push branch (no PR)** | without a token, after a `DRY_RUN_OK` dry run | `confirm: true, push_only: true`: pushes the branch over SSH and shows **Open the pull request on GitHub**, the pre-filled form a person with access opens it from. No PR is created |
+
+The dashboard works on the live resolution, not on the reviewed plan, and
+does not write the links file. For a batch, and for the reviewed-plan
+guarantee, use the CLI.
 
 ```bash
 # dry run over the API: nothing is pushed

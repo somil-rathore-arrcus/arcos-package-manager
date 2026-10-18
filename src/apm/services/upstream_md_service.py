@@ -36,7 +36,9 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from ..domain.enums import ResolutionStatus, UpstreamMdOutcome
-from ..domain.models import UpstreamMdDocument, UpstreamResolution
+from ..domain.models import (
+    UpstreamMdDocument, UpstreamMdReviewFlag, UpstreamResolution,
+)
 
 log = logging.getLogger(__name__)
 
@@ -254,6 +256,10 @@ class UpstreamMdService:
             path=UPSTREAM_MD_PATH,
             content=content,
             existing_content=existing,
+            review_flags=[
+                UpstreamMdReviewFlag(code=f.code, detail=f.detail)
+                for f in review_flags(resolution)
+            ],
         )
 
         document.outcome, diff = classify(existing, content)

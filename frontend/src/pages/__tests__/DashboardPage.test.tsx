@@ -333,7 +333,7 @@ describe('patch workflow', () => {
   it('announces read-only mode in the header', async () => {
     await openDashboard({ health: fx.healthNoToken })
     expect(
-      await screen.findByText(/read-only mode — github write operations disabled/i),
+      await screen.findByText(/read-only mode — no github token; the tool opens no pull requests/i),
     ).toBeInTheDocument()
   })
 })
@@ -374,6 +374,90 @@ describe('upstream.md', () => {
 
     expect(await screen.findByText(/CONFLICT: debian\/upstream.md was not written/))
       .toBeInTheDocument()
+  })
+
+  it('dry-runs a proposal without pushing, and shows where it would go', async () => {
+    const recorded = await openDashboard({ upstreamMdPr: fx.upstreamMdDryRun })
+    await resolve()
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
+    await screen.findByText('CREATED')
+    await user.click(screen.getByRole('button', { name: /^dry run$/i }))
+
+    expect(await screen.findByText('DRY_RUN_OK')).toBeInTheDocument()
+    expect(screen.getByText('upstream-metadata/bookworm/pyrad')).toBeInTheDocument()
+    expect(screen.getByText(/nothing was pushed/i)).toBeInTheDocument()
+    const call = recorded.calls.find((c) => c.path === '/upstream-md/pr')
+    expect(call?.body).toMatchObject({ package: 'pyrad', dry_run: true, push_only: false })
+    expect(call?.body).not.toHaveProperty('confirm')
+    // With a token the tool opens the PR itself; there is no push-only step.
+    expect(screen.queryByRole('button', { name: /push branch/i })).toBeNull()
+  })
+
+  it('without a token, pushes only after a dry run and links the PR form', async () => {
+    const recorded = await openDashboard({
+      health: fx.healthNoToken,
+      upstreamMdPr: (body: { dry_run?: boolean }) =>
+        body.dry_run ? fx.upstreamMdDryRun : fx.upstreamMdPushed,
+    })
+    await resolve()
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
+    await screen.findByText('CREATED')
+    expect(screen.queryByRole('button', { name: /create pull request/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /push branch/i })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: /^dry run$/i }))
+    await screen.findByText('DRY_RUN_OK')
+    const calls = () => recorded.calls.filter((c) => c.path === '/upstream-md/pr')
+    expect(calls()).toHaveLength(1)
+    expect(calls()[0].body).toMatchObject({ dry_run: true, push_only: true })
+
+    await user.click(screen.getByRole('button', { name: /push branch \(no pr\)/i }))
+    const link = await screen.findByRole('link', { name: /open the pull request on github/i })
+    expect(link).toHaveAttribute('href', fx.upstreamMdPushed.pr_create_url)
+    expect(calls()).toHaveLength(2)
+    expect(calls()[1].body).toMatchObject({ confirm: true, push_only: true })
+    expect(calls()[1].body).not.toHaveProperty('dry_run')
+    expect(screen.getByText(/no pull request was created/i)).toBeInTheDocument()
+  })
+
+  it('reports a push that stopped short as an error, not a link', async () => {
+    await openDashboard({
+      health: fx.healthNoToken,
+      upstreamMdPr: (body: { dry_run?: boolean }) => body.dry_run ? fx.upstreamMdDryRun : {
+        ...fx.upstreamMdPushed, status: 'BRANCH_EXISTS', pushed: false, pr_create_url: null,
+        error: 'upstream-metadata/bookworm/pyrad already exists on the fork',
+      },
+    })
+    await resolve()
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
+    await screen.findByText('CREATED')
+    await user.click(screen.getByRole('button', { name: /^dry run$/i }))
+    await screen.findByText('DRY_RUN_OK')
+    await user.click(screen.getByRole('button', { name: /push branch \(no pr\)/i }))
+
+    expect(await screen.findByText(/BRANCH_EXISTS: upstream-metadata\/bookworm\/pyrad already exists/))
+      .toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /open the pull request on github/i })).toBeNull()
+  })
+
+  it('shows what a reviewer should check before merging', async () => {
+    await openDashboard({
+      upstreamMd: {
+        ...fx.upstreamMd,
+        content: 'Upstream Source: https://git.kernel.org/pub/scm/network/iproute2/iproute2.git\n\n'
+          + 'Current Upstream Branch: N/A - no upstream branch verified; upstream tag v6.1.0\n',
+        review_flags: [
+          { code: 'BRANCH_NOT_VERIFIED', detail: 'the mapping records upstream tag v6.1.0, not a branch' },
+          { code: 'TAG_ONLY', detail: 'upstream tag v6.1.0 is the only ref recorded' },
+        ],
+      },
+    })
+    await resolve()
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
+
+    expect(await screen.findByText(/check before merging/i)).toBeInTheDocument()
+    expect(screen.getByText('TAG_ONLY')).toBeInTheDocument()
+    expect(screen.getByText('BRANCH_NOT_VERIFIED')).toBeInTheDocument()
   })
 
   it('is hidden for a package with no upstream', async () => {

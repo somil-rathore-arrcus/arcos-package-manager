@@ -255,6 +255,16 @@ def test_a_tag_only_package_is_flagged_with_the_tag_and_the_reason():
     )
 
 
+def test_the_generated_document_carries_the_flags_the_dashboard_shows():
+    """The dashboard reads the flags from the document, so they must be the
+    plan's flags, not a second opinion - and a clean package has none."""
+    document = SERVICE.generate(_tag_only())
+    assert [(f.code, f.detail) for f in document.review_flags] == [
+        (f.code, f.detail) for f in review_flags(_tag_only())
+    ]
+    assert SERVICE.generate(_resolution()).review_flags == []
+
+
 def test_the_missing_base_tag_names_debians_version():
     flag = review_flags(VARIANTS["tag not in the fork"])[-1]
     assert flag.code == BASE_TAG_NOT_IN_FORK

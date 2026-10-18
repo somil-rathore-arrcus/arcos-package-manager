@@ -434,6 +434,7 @@ def test_upstream_md_generation_writes_nothing_remote(app_container):
         "package": "pyrad", "release": "bookworm",
     }).json()
     assert body["outcome"] == "CREATED"
+    assert isinstance(body["review_flags"], list)
     assert fake.github.created == []
 
 

@@ -231,5 +231,18 @@ export const upstreamMd: UpstreamMdDocument = {
   content: 'Upstream Source: https://github.com/wichert/pyrad.git\n\n'
     + 'Current Upstream Branch: master\n',
   outcome: 'CREATED',
-  existing_content: null, diff: null, local_path: null,
+  existing_content: null, diff: null, local_path: null, review_flags: [],
+}
+
+// Push-only: the form GitHub pre-fills, opened by a person once the branch is pushed.
+const prForm = 'https://github.com/Arrcus/pyrad/compare/aminor...upstream-metadata/bookworm/pyrad'
+  + '?quick_pull=1&title=pyrad%3A+add+debian%2Fupstream.md&body=Problem+Description+%3A'
+
+export const upstreamMdDryRun: PublishResult = {
+  ...upstreamMdPublish, status: 'DRY_RUN_OK', commit: null, pushed: false,
+  pull_request: null, pr_create_url: prForm,
+}
+
+export const upstreamMdPushed: PublishResult = {
+  ...upstreamMdDryRun, status: 'BRANCH_PUSHED', commit: 'c'.repeat(40), pushed: true,
 }

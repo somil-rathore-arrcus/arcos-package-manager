@@ -10,7 +10,7 @@ import { UpstreamMdPanel } from '../components/UpstreamMdPanel'
 import { Loading } from '../components/ui'
 import { useAsyncAction, useAsyncData } from '../hooks/useApi'
 import { api } from '../services/api'
-import type { CherryPickResult, PullRequest } from '../types/api'
+import type { CherryPickResult, PublishResult, PullRequest } from '../types/api'
 
 export function DashboardPage() {
   const [selection, setSelection] = useState<SelectionState>({
@@ -21,8 +21,10 @@ export function DashboardPage() {
   const [cherryPick, setCherryPick] = useState<CherryPickResult | null>(null)
   const [patchPr, setPatchPr] = useState<PullRequest | null>(null)
   const [mdPr, setMdPr] = useState<PullRequest | null>(null)
+  const [mdPushed, setMdPushed] = useState<PublishResult | null>(null)
 
   const health = useAsyncData(() => api.health(), [])
+  const canCreatePr = !!health.data?.capabilities?.create_pull_requests
   const releases = useAsyncData(() => api.releases(), [])
   const reports = useAsyncData(() => api.reports(), [])
 
@@ -146,13 +148,42 @@ export function DashboardPage() {
     return result.pull_request
   })
 
+  // Every read and check of a real push, then stop. Without a token it is the
+  // push-only dry run, so it shows the link the push would give.
+  const mdDryRun = useAsyncAction(async () =>
+    api.createUpstreamMdPr({
+      package: selection.pkg, release: selection.release,
+      arcos_branch: selection.branch.trim() || undefined,
+      dry_run: true, push_only: !canCreatePr,
+    }),
+  )
+
+  // Without a token: push the branch over SSH and hand back the link a person
+  // opens the pull request from. Offered only after a clean dry run.
+  const pushMdBranch = useAsyncAction(async () => {
+    const result = await api.createUpstreamMdPr({
+      package: selection.pkg, release: selection.release,
+      arcos_branch: selection.branch.trim() || undefined,
+      confirm: true, push_only: true,
+    })
+    if (result.pull_request) {
+      setMdPr(result.pull_request)
+    } else if (result.status === 'BRANCH_PUSHED' && result.pr_create_url) {
+      setMdPushed(result)
+    } else {
+      throw new Error(`${result.status}${result.error ? `: ${result.error}` : ''}`)
+    }
+    return result
+  })
+
   const resetDownstream = () => {
     resolution.reset(); comparison.reset(); preview.reset(); apply.reset()
     upstreamMd.reset(); createPr.reset(); createMdPr.reset()
+    mdDryRun.reset(); pushMdBranch.reset()
     setSelected(new Set()); setCherryPick(null); setPatchPr(null); setMdPr(null)
+    setMdPushed(null)
   }
 
-  const canCreatePr = !!health.data?.capabilities?.create_pull_requests
   const mapping = health.data?.capabilities?.mapping as
     { rows?: number; generated_at?: string | null } | undefined
   const mappingRows = mapping?.rows ?? null
@@ -170,8 +201,13 @@ export function DashboardPage() {
             </span>
           )}
           {health.data && !canCreatePr && (
-            <span className="badge tone-neutral" title="No GitHub token is configured.">
-              Read-only mode — GitHub write operations disabled
+            <span
+              className="badge tone-neutral"
+              title={'No GitHub token is configured. Patch branches cannot be pushed; '
+                + 'a debian/upstream.md branch can be pushed over SSH and its pull '
+                + 'request opened from a GitHub link.'}
+            >
+              Read-only mode — no GitHub token; the tool opens no pull requests
             </span>
           )}
           <DownloadMappingReport reports={reports.data ?? []} />
@@ -266,14 +302,25 @@ export function DashboardPage() {
           <>
             <ErrorAlert error={upstreamMd.error} />
             <ErrorAlert error={createMdPr.error} />
+            <ErrorAlert error={mdDryRun.error} />
+            <ErrorAlert error={pushMdBranch.error} />
             <UpstreamMdPanel
               document={upstreamMd.data}
               pullRequest={mdPr}
-              onGenerate={() => upstreamMd.run()}
+              onGenerate={() => {
+                mdDryRun.reset(); pushMdBranch.reset(); setMdPushed(null)
+                upstreamMd.run()
+              }}
               generating={upstreamMd.loading}
               onCreatePr={() => createMdPr.run()}
               creatingPr={createMdPr.loading}
               canCreatePr={canCreatePr}
+              dryRun={mdDryRun.data}
+              onDryRun={() => mdDryRun.run()}
+              dryRunning={mdDryRun.loading}
+              pushed={mdPushed}
+              onPush={() => pushMdBranch.run()}
+              pushing={pushMdBranch.loading}
             />
           </>
         )}

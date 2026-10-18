@@ -271,8 +271,9 @@ It ends with `FAILURES: none` when everything passes.
 ## One package, from the dashboard or the API
 
 The dashboard's **debian/upstream.md** card - **Generate** - renders the file
-for the selected package and shows the diff against the fork and the outcome
-badge. It does not write the plan.
+for the selected package and shows the diff against the fork, the outcome
+badge and, under **Check before merging**, the package's review flags (the same
+ones the plan lists). It does not write the plan.
 
 ```bash
 curl -s -X POST http://<server-ip>:8080/api/upstream-md/generate \

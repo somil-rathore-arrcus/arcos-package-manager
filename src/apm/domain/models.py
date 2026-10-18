@@ -666,6 +666,13 @@ class PullRequest(BaseModel):
     already_existed: bool = False
 
 
+class UpstreamMdReviewFlag(BaseModel):
+    """Something a reviewer should check before the file is merged."""
+
+    code: str
+    detail: str
+
+
 class UpstreamMdDocument(BaseModel):
     """debian/upstream.md, generated from a verified resolution."""
 
@@ -677,6 +684,11 @@ class UpstreamMdDocument(BaseModel):
     existing_content: Optional[str] = None
     diff: Optional[str] = None
     local_path: Optional[str] = None
+    review_flags: List[UpstreamMdReviewFlag] = Field(
+        default_factory=list,
+        description="The same flags the plan and the pull request body carry. "
+                    "None of them blocks publishing.",
+    )
 
 
 class PublishResult(BaseModel):
