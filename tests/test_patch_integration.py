@@ -101,6 +101,10 @@ def test_conflict_is_reported_and_never_resolved(world):
     assert preview.failed_sha == world["shas"]["D"]
     assert "shared.txt" in preview.conflicts
     assert preview.applied == []
+    # git's own advice to resolve and --continue does not apply: the workspace
+    # is gone. Its error line stays.
+    assert not any("hint:" in w for w in preview.warnings)
+    assert any("could not apply" in w for w in preview.warnings)
 
 
 def test_empty_selection_is_refused_not_guessed(world):

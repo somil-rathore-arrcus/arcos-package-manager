@@ -316,7 +316,8 @@ class PatchService:
                         f"{selection.arcos_branch} ({base[:12]}). "
                         f"{len(applied)} of {len(ordered)} applied before it."
                     ),
-                    warnings=checks + ([stderr[:400]] if stderr else []),
+                    warnings=checks + ([_without_hints(stderr)[:400]]
+                                       if _without_hints(stderr) else []),
                     **common,
                 )
 
@@ -452,6 +453,14 @@ class PatchService:
             validation=validation,
             message=f"Applied {len(applied)} commits to {new_branch}.",
         )
+
+
+def _without_hints(stderr: str) -> str:
+    """git's error without its "hint:" lines, which tell a person to resolve
+    and `git cherry-pick --continue` in a workspace that no longer exists."""
+    return "\n".join(
+        line for line in stderr.splitlines() if not line.startswith("hint:")
+    ).strip()
 
 
 def _exit_code(stderr: str):
