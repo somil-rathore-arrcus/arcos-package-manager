@@ -120,10 +120,13 @@ export function DashboardPage() {
 
   const createPr = useAsyncAction(async () => {
     if (!cherryPick) return null
+    // The title and description the backend wrote when it applied and
+    // validated the series, so the PR reports what actually ran.
     const pr = await api.createPullRequest({
       package: selection.pkg, release: selection.release,
       arcos_branch: selection.branch.trim(), head_branch: cherryPick.new_branch,
       applied: cherryPick.applied,
+      title: cherryPick.pr_title || undefined, body: cherryPick.pr_body || undefined,
     })
     setPatchPr(pr)
     return pr

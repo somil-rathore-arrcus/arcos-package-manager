@@ -51,6 +51,7 @@ Every handled error is JSON with a code the dashboard renders differently:
 | POST | `/api/upstream-md/generate` | Render `debian/upstream.md` | optional local file |
 | POST | `/api/upstream-md/pr` | Propose it (dry run or real) | **pushes and opens a PR with `confirm: true`; pushes only, with `push_only: true`** |
 | GET | `/api/upstream-md/prs` | The publish results ledger | - |
+| GET | `/api/publish-status` | A pushed branch: its PR (from git refs) and CI (API) | - |
 | GET | `/api/reports` | Generated reports on disk | - |
 | GET | `/api/reports/{name}` | Download one | - |
 
@@ -154,9 +155,11 @@ See [patch-workflow.md](patch-workflow.md) for the sequence.
  "comparison_upstream_commit": "<sha>", "approved_shas": []}
 ```
 
-→ `outcome` (`CLEAN`, `CONFLICT`, `EMPTY`, `FAILED`), `order`, `applied`,
-`files_changed`, `conflicts`, `base_sha`, `base_moved`, `warnings`. 409
-`STALE_SELECTION` if a commit is no longer in the missing set.
+→ `outcome` (`CLEAN`, `CONFLICT`, `VALIDATION_FAILED`, `EMPTY`, `FAILED`),
+`order`, `applied`, `files_changed`, `conflicts`, `base_sha`, `base_moved`,
+`warnings`, `validation` (`configured`, `passed` - `null` when nothing is
+configured - `runs` with command, exit code, duration and output tail, and
+`message`). 409 `STALE_SELECTION` if a commit is no longer in the missing set.
 
 **`POST /api/patches/cherry-pick`** - the preview body plus:
 
@@ -166,7 +169,10 @@ See [patch-workflow.md](patch-workflow.md) for the sequence.
 
 `expected_base_sha` is required (400 without it; 409 `BASE_MOVED` if the target
 moved). The branch defaults to `upstream/<package>/<timestamp>` and may not
-equal the target. Pushes only with `push: true`.
+equal the target. Pushes only with `push: true`, and never when validation
+fails (`outcome: VALIDATION_FAILED`). The result adds `commits` (subject,
+author, date), `validation`, and the pull request's `pr_title` and `pr_body`;
+once pushed, `pr_create_url` opens GitHub's pre-filled form without a token.
 
 **`POST /api/pull-requests`** (token required)
 
@@ -179,6 +185,16 @@ equal the target. Pushes only with `push: true`.
 Returns the PR, or the one already open for that branch.
 
 **`GET /api/pull-requests/{number}?package=mstpd&release=bookworm`**
+
+**`GET /api/publish-status?package=mstpd&branch=upstream-metadata/bookworm/mstpd&base=aminor`**
+
+For a branch this tool created (`upstream/...` or `upstream-metadata/...`; 400
+otherwise): `branch_exists`, `head_sha`, `pull_requests` (number and URL of
+each PR whose head is that commit, from `refs/pull/<n>/head` over SSH - no
+token needed), `pull_request` (state, with a token), `api_access`, and `ci`:
+`state` `SUCCESS` | `FAILURE` | `PENDING` | `NONE` | `UNAVAILABLE`, `checks`
+(name, status, conclusion, URL, summary) and `reason`. `UNAVAILABLE` - no
+token, no permission, GitHub unreachable - is never a pass.
 
 ## `debian/upstream.md`
 

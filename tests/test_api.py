@@ -167,6 +167,35 @@ class FakeGitHub:
     def get_pull_request(self, slug, number):
         return PullRequest(number=number, url=f"https://github.com/o/r/pull/{number}")
 
+    def find_pull_request(self, slug, head, base, state="open"):
+        return None
+
+    def ci_status(self, slug, sha):
+        from apm.domain.enums import CiState
+        from apm.domain.models import CiStatus
+        if not self.token:
+            return CiStatus(state=CiState.UNAVAILABLE, sha=sha, reason="no API credential")
+        return CiStatus(state=CiState.SUCCESS, sha=sha)
+
+
+class FakeRefs:
+    """ls-remote of Arrcus/pyrad: a pushed patch branch with PR #9 opened from it."""
+
+    PUSHED = "e" * 40
+
+    def __init__(self):
+        self.calls = []
+
+    def for_url(self, url):
+        return self
+
+    def run(self, args, timeout=None):
+        from apm.gitio.transport import GitResult
+        self.calls.append(args)
+        return GitResult(True, f"{self.PUSHED}\trefs/heads/upstream/pyrad/x\n"
+                               f"{self.PUSHED}\trefs/pull/9/head\n"
+                               f"{'f' * 40}\trefs/pull/8/head\n", "")
+
 
 class FakePublisher:
     """Records what the route asked for; the real publisher has its own tests."""
@@ -249,6 +278,9 @@ class FakeContainer:
             self.upstream_md, workspaces=self.workspaces
         )
         self.publisher = FakePublisher()
+        from apm.services.publish_status import PublishStatusService
+        self.refs = FakeRefs()
+        self.publish_status = PublishStatusService(self.refs, self.github)
 
     def capabilities(self):
         return {"create_pull_requests": self.github.can_create_pull_requests}
@@ -680,3 +712,58 @@ def test_a_report_name_cannot_escape_the_output_directory(app_container, tmp_pat
     client, _ = app_container
     for name in ("../../etc/passwd", "..%2f..%2fetc%2fpasswd", "settings.yaml"):
         assert client.get(f"/api/reports/{name}").status_code == 404
+
+
+# -- publish status and the patch pull request ----------------------------------
+
+def test_publish_status_finds_the_pull_request_from_git_refs(app_container):
+    client, fake = app_container
+    fake.github.token = ""
+    body = client.get("/api/publish-status", params={
+        "package": "pyrad", "branch": "upstream/pyrad/x", "base": "aminor"}).json()
+    assert body["repository"] == "Arrcus/pyrad"
+    assert body["branch_exists"] is True and body["head_sha"] == FakeRefs.PUSHED
+    assert body["pull_requests"] == [
+        {"number": 9, "url": "https://github.com/Arrcus/pyrad/pull/9"}]
+    assert body["ci"]["state"] == "UNAVAILABLE" and body["api_access"] is False
+
+
+def test_publish_status_refuses_a_branch_the_tool_does_not_create(app_container):
+    client, fake = app_container
+    response = client.get("/api/publish-status", params={
+        "package": "pyrad", "branch": "aminor"})
+    assert response.status_code == 400
+    assert response.json()["code"] == "INVALID_REQUEST"
+    assert fake.refs.calls == []
+
+
+def test_publish_status_for_an_unknown_package_is_404(app_container):
+    client, _ = app_container
+    response = client.get("/api/publish-status", params={
+        "package": "nope", "branch": "upstream/nope/x"})
+    assert response.status_code == 404
+
+
+def _cherry_pick(client, push):
+    return client.post("/api/patches/cherry-pick", json={
+        "package": "pyrad", "release": "bookworm", "arcos_branch": "aminor",
+        "upstream_repository": "https://github.com/wichert/pyrad.git",
+        "upstream_ref": "master", "shas": ["d" * 40],
+        "expected_base_sha": "3" * 40, "push": push,
+    }).json()
+
+
+def test_a_pushed_patch_branch_carries_its_pr_description_and_link(app_container):
+    client, _ = app_container
+    body = _cherry_pick(client, push=True)
+    assert body["pr_title"] == "pyrad: pull 1 upstream commit(s) into aminor"
+    assert body["pr_body"].startswith("Problem Description :")
+    assert "Root Cause :" in body["pr_body"] and "Fix Details :" in body["pr_body"]
+    assert body["pr_create_url"].startswith(
+        "https://github.com/Arrcus/pyrad/compare/aminor...upstream/pyrad/x?quick_pull=1")
+
+
+def test_an_unpushed_patch_branch_has_no_link(app_container):
+    client, _ = app_container
+    body = _cherry_pick(client, push=False)
+    assert body["pr_body"] and body["pr_create_url"] is None

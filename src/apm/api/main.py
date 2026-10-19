@@ -15,7 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .. import __version__
 from . import errors
 from .routes import (
-    catalog, comparison, health, patches, reports, upstream, upstream_md,
+    catalog, comparison, health, patches, publish_status, reports, upstream,
+    upstream_md,
 )
 
 log = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ def create_app() -> FastAPI:
         )
 
     for module in (health, catalog, upstream, comparison, patches, upstream_md,
-                   reports):
+                   publish_status, reports):
         app.include_router(module.router, prefix=API_PREFIX)
 
     @app.get("/health", tags=["health"])

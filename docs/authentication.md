@@ -88,6 +88,8 @@ The standard deployment does not use a bridge.
 - `GET /repos/{owner}/{repo}` - pre-flight: can the token see the repository?
 - `GET /repos/{owner}/{repo}/pulls` - is there already a PR for this branch?
 - `POST /repos/{owner}/{repo}/pulls` - open the PR.
+- `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` and `.../status` - read
+  CI for a pushed branch.
 
 Nothing else. Branches are pushed with the SSH key, never with the token.
 
@@ -97,8 +99,9 @@ Create it on GitHub by the account that should appear as PR author:
 
 - **Fine-grained token**: resource owner the organisation (`Arrcus`);
   repository access to the ARCoS package repositories; permissions
-  **Pull requests: Read and write** and **Metadata: Read**. `Contents: write`
-  is not needed.
+  **Pull requests: Read and write** and **Metadata: Read**, plus **Checks:
+  Read** and **Commit statuses: Read** to show CI. `Contents: write` is not
+  needed.
 - **Classic token**: scope `repo`.
 - If the organisation enforces SAML SSO, authorise the token for it.
 - Give it an expiry date. When it expires, the publisher stops with
@@ -153,6 +156,12 @@ permissions; the right to open a PR is proven by the first real PR.
 - `apm publish-upstream-md --apply --push-only` pushes the branches anyway,
   with the SSH key, and gives a link per package to open its pull request
   (below).
+- A patch branch can be pushed the same way (**Push patch branch (no PR)**),
+  with a link to open its pull request.
+- A pull request opened from a pushed branch is still found - number and
+  link - from the fork's `refs/pull/<n>/head` over SSH. Its state and its CI
+  checks are not: they need the API, and `/api/publish-status` reports CI as
+  `UNAVAILABLE` with that reason.
 - Everything else - discovery, resolution, comparison, preview, generation,
   dry runs - works.
 

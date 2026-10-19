@@ -1,6 +1,13 @@
 // GENERATED from the FastAPI OpenAPI schema - do not edit by hand.
 // Regenerate: ./.venv/bin/python scripts/generate_frontend_types.py
 
+export interface AppliedCommit {
+  sha: string
+  subject: string
+  author: string
+  date: string
+}
+
 export interface Branch {
   name: string
   sha: string | null
@@ -8,6 +15,14 @@ export interface Branch {
   /** Named by the release manifest for this package. */
   is_configured: boolean
   web_url: string | null
+}
+
+export interface CheckRun {
+  name: string
+  status: string
+  conclusion: string | null
+  url: string | null
+  summary: string
 }
 
 export interface CherryPickPreview {
@@ -27,6 +42,7 @@ export interface CherryPickPreview {
   upstream_sha: string | null
   /** The target branch is not the commit the comparison was computed against. */
   base_moved: boolean
+  validation: ValidationReport | null
   /** Every selected commit was re-checked against the current target tip and upstream ref. */
   validated: boolean
 }
@@ -62,6 +78,23 @@ export interface CherryPickResult {
   conflicts: string[]
   failed_sha: string | null
   message: string | null
+  commits: AppliedCommit[]
+  validation: ValidationReport | null
+  /** The title a pull request for this branch should carry. */
+  pr_title: string
+  /** Its description, with the sections ARCoS CI requires. */
+  pr_body: string
+  /** GitHub's pre-filled 'open a pull request' page, once the branch is pushed. For opening it without a token. */
+  pr_create_url: string | null
+}
+
+export type CiState = "SUCCESS" | "FAILURE" | "PENDING" | "NONE" | "UNAVAILABLE"
+
+export interface CiStatus {
+  state: CiState
+  sha: string | null
+  checks: CheckRun[]
+  reason: string
 }
 
 export type CommitClass = "MISSING_UPSTREAM" | "ARCOS_ONLY" | "ALREADY_BACKPORTED"
@@ -283,6 +316,11 @@ export interface DebianUpload {
   security: boolean
 }
 
+export interface DetectedPullRequest {
+  number: number
+  url: string
+}
+
 export interface FileChange {
   path: string
   status: string
@@ -359,7 +397,7 @@ export interface PatchRequest {
 
 export type Presence = "DEFINITELY_PRESENT" | "PROBABLY_PRESENT" | "MISSING" | "UNKNOWN"
 
-export type PreviewOutcome = "CLEAN" | "CONFLICT" | "EMPTY" | "FAILED"
+export type PreviewOutcome = "CLEAN" | "CONFLICT" | "EMPTY" | "FAILED" | "VALIDATION_FAILED"
 
 export interface PublishResult {
   package: string
@@ -388,6 +426,21 @@ export interface PublishResult {
 }
 
 export type PublishStatus = "DRY_RUN_OK" | "BRANCH_PUSHED" | "PR_OPENED" | "PR_EXISTS" | "PR_MERGED" | "PR_CLOSED" | "NO_CHANGE" | "SKIPPED_NO_UPSTREAM" | "SKIPPED_NEEDS_REVIEW" | "SKIPPED_EXCLUDED" | "CONFLICT" | "DRIFT" | "BRANCH_EXISTS" | "BASE_UNREADABLE" | "PUSH_FAILED" | "PR_FAILED" | "ERROR"
+
+export interface PublishStatusReport {
+  package: string
+  repository: string
+  head_branch: string
+  base_branch: string
+  branch_exists: boolean
+  head_sha: string | null
+  /** Pull requests opened from the branch's commit, read from git refs. */
+  pull_requests: DetectedPullRequest[]
+  /** The pull request as the GitHub API reports it; only with API access. */
+  pull_request: PullRequest | null
+  api_access: boolean
+  ci: CiStatus
+}
 
 export interface PullRequest {
   number?: number | null
@@ -607,6 +660,22 @@ export interface UpstreamResolution {
   candidates: UpstreamCandidate[]
   notes: string[]
   resolved_at: string | null
+}
+
+export interface ValidationReport {
+  configured: boolean
+  passed: boolean | null
+  runs: ValidationRun[]
+  message: string
+}
+
+export interface ValidationRun {
+  command: string
+  exit_code: number | null
+  timed_out: boolean
+  duration_seconds: number
+  /** The tail of stdout and stderr. */
+  output: string
 }
 
 export type VerificationLevel = "NONE" | "REF_EXISTS" | "SHARED_HISTORY" | "CONTENT_MATCH_APPROVED"

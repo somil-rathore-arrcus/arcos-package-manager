@@ -20,9 +20,10 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
-from ..domain.enums import ErrorCode, UpstreamMdOutcome
+from ..domain.enums import CiState, ErrorCode, UpstreamMdOutcome
 from ..domain.models import (
-    CherryPickResult, ComparisonResult, PullRequest, UpstreamResolution,
+    CheckRun, CherryPickResult, CiStatus, ComparisonResult, PullRequest,
+    UpstreamResolution, ValidationReport,
 )
 from .upstream_md_service import (
     BRANCH_LABEL, SOURCE_LABEL, UPSTREAM_MD_PATH, UpstreamMdService,
@@ -199,6 +200,63 @@ class GitHubService:
             )
         return _to_pull_request(response.json())
 
+    def ci_status(self, slug: str, sha: str) -> CiStatus:
+        """The checks GitHub reports for `sha`: check runs and commit statuses.
+
+        Without API access, or when GitHub cannot be asked, this is UNAVAILABLE
+        with the reason - never a pass. A commit nothing has reported on yet is
+        NONE, which is also not a pass.
+        """
+        if not self.token:
+            return CiStatus(
+                state=CiState.UNAVAILABLE, sha=sha,
+                reason="Check results are only available through the GitHub "
+                       "API, and no API credential is configured "
+                       "(APM_GITHUB_TOKEN is empty). Git over SSH cannot read "
+                       "them.",
+            )
+        try:
+            runs = self._request("GET", f"/repos/{slug}/commits/{sha}/check-runs",
+                                 params={"per_page": 100})
+            statuses = self._request("GET", f"/repos/{slug}/commits/{sha}/status")
+        except GitHubError as exc:
+            return CiStatus(state=CiState.UNAVAILABLE, sha=sha,
+                            reason=f"GitHub could not be reached: {exc}")
+        for response in (runs, statuses):
+            if response.status_code in (401, 403, 404):
+                return CiStatus(
+                    state=CiState.UNAVAILABLE, sha=sha,
+                    reason=f"The API credential cannot read checks on {slug} "
+                           f"(HTTP {response.status_code}: {_message(response)}).",
+                )
+            if response.status_code >= 400:
+                return CiStatus(
+                    state=CiState.UNAVAILABLE, sha=sha,
+                    reason=f"GitHub answered HTTP {response.status_code}: "
+                           f"{_message(response)}",
+                )
+
+        checks = [
+            CheckRun(
+                name=run.get("name", ""), status=run.get("status", ""),
+                conclusion=run.get("conclusion"),
+                url=run.get("html_url") or run.get("details_url"),
+                summary=((run.get("output") or {}).get("title") or ""),
+            )
+            for run in runs.json().get("check_runs", [])
+        ]
+        for status in statuses.json().get("statuses", []) or []:
+            state = status.get("state", "")
+            checks.append(CheckRun(
+                name=status.get("context", ""),
+                status="completed" if state in ("success", "failure", "error")
+                else "pending",
+                conclusion=state if state in ("success", "failure", "error") else None,
+                url=status.get("target_url"),
+                summary=status.get("description") or "",
+            ))
+        return CiStatus(state=_ci_state(checks), sha=sha, checks=checks)
+
     # -- writes ------------------------------------------------------------
 
     def create_pull_request(self, slug: str, head_branch: str, base: str,
@@ -251,11 +309,42 @@ class GitHubService:
 def build_patch_pr_body(resolution: UpstreamResolution,
                         result: CherryPickResult,
                         comparison: Optional[ComparisonResult] = None,
-                        commits: Optional[List] = None) -> str:
-    """Describe the change so a reviewer can judge it without rerunning the tool."""
+                        commits: Optional[List] = None,
+                        validation: Optional[ValidationReport] = None) -> str:
+    """Describe the change so a reviewer can judge it without rerunning the tool.
+
+    ARCoS CI rejects a PR whose body lacks "Problem Description :", "Root
+    Cause :" and "Fix Details :", each followed by text, so they come first.
+    Validation is reported as it happened: when nothing was built or tested,
+    the body says so.
+    """
+    count = len(result.applied)
+    upstream_url = (resolution.upstream_repository.url
+                    if resolution.upstream_repository else "")
+    merge_base = (comparison.summary.merge_base
+                  if comparison and comparison.summary.merge_base
+                  else resolution.merge_base or "")[:12]
+    base_sha = (result.base_sha or "")[:12]
+    validation = validation or result.validation
     lines = [
-        f"Pulls {len(result.applied)} upstream commit(s) into "
-        f"`{result.base_branch}`.",
+        "Problem Description :",
+        f"The ARCoS fork of {resolution.package} ({result.base_branch}) is "
+        f"missing {count} upstream commit(s) from "
+        f"{upstream_url or 'its upstream'} ({resolution.upstream_ref}) that were "
+        f"selected for backport.",
+        "",
+        "Root Cause :",
+        "The fork diverged from upstream"
+        + (f" at {merge_base}" if merge_base else "")
+        + "; these upstream changes were made after that point and have not "
+        "been brought across.",
+        "",
+        "Fix Details :",
+        f"Cherry-picks the {count} selected upstream commit(s) with "
+        f"`git cherry-pick -x`, oldest first, onto a branch created from "
+        f"`{result.base_branch}`" + (f" at {base_sha}" if base_sha else "")
+        + ". The target branch was not modified, and only the selected commits "
+        "are included.",
         "",
         "| | |",
         "|---|---|",
@@ -271,14 +360,20 @@ def build_patch_pr_body(resolution: UpstreamResolution,
     lines += ["", "## Commits", ""]
 
     selected = {c.sha: c for c in (commits or [])}
+    described = {c.sha: c for c in result.commits}
+    upstream_slug = repo_slug(upstream_url)
     for sha in result.applied:
+        ref = (f"[`{sha[:12]}`](https://github.com/{upstream_slug}/commit/{sha})"
+               if upstream_slug else f"`{sha}`")
         commit = selected.get(sha)
         if commit is None:
-            lines.append(f"- `{sha[:12]}`")
+            info = described.get(sha)
+            subject = f" {info.subject}" if info and info.subject else ""
+            lines.append(f"- {ref}{subject} — criticality not assessed here")
             continue
         level = commit.criticality.level.value
         evidence = "; ".join(commit.criticality.evidence)
-        entry = f"- `{sha[:12]}` {commit.subject} — **{level}**"
+        entry = f"- {ref} {commit.subject} — **{level}**"
         if evidence:
             entry += f" ({evidence})"
         lines.append(entry)
@@ -293,6 +388,19 @@ def build_patch_pr_body(resolution: UpstreamResolution,
             f"advisory).",
         ]
 
+    lines += ["", "## Validation", ""]
+    if validation is None or not validation.configured:
+        lines.append("No validation command is configured, so nothing was built "
+                     "or tested by the tool. Review and test before merging.")
+    else:
+        for run in validation.runs:
+            outcome = ("timed out" if run.timed_out else
+                       f"exit {run.exit_code}" if run.exit_code is not None
+                       else "did not report an exit status")
+            lines.append(f"- `{run.command}` — {outcome} ({run.duration_seconds}s)")
+        lines.append("")
+        lines.append(validation.message)
+
     lines += [
         "", "---",
         "", "Prepared by the ARCoS Package Manager. Commits were applied with "
@@ -300,6 +408,10 @@ def build_patch_pr_body(resolution: UpstreamResolution,
         "branch was not modified.",
     ]
     return "\n".join(lines)
+
+
+def patch_pr_title(package: str, base_branch: str, count: int) -> str:
+    return f"{package}: pull {count} upstream commit(s) into {base_branch}"
 
 
 def build_upstream_md_pr_body(resolution: UpstreamResolution,
@@ -392,6 +504,25 @@ def build_upstream_md_pr_body(resolution: UpstreamResolution,
         lines += [f"- `{flag.code}`: {flag.detail}" for flag in flags]
     lines += ["", "Generated by the ARCoS Package Manager."]
     return "\n".join(lines)
+
+
+_FAILED = {"failure", "error", "cancelled", "timed_out", "action_required",
+           "startup_failure"}
+_PASSED = {"success", "neutral", "skipped"}
+
+
+def _ci_state(checks: List[CheckRun]) -> CiState:
+    """Failure if anything failed, pending while anything runs, success only
+    when every check finished and passed; NONE when nothing reported."""
+    if not checks:
+        return CiState.NONE
+    if any((c.conclusion or "") in _FAILED for c in checks):
+        return CiState.FAILURE
+    if any(c.status != "completed" for c in checks):
+        return CiState.PENDING
+    if all((c.conclusion or "") in _PASSED for c in checks):
+        return CiState.SUCCESS
+    return CiState.PENDING
 
 
 def _to_pull_request(payload: dict, already_existed: bool = False) -> PullRequest:

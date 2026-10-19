@@ -137,6 +137,7 @@ Only for a deployment whose own key cannot reach the repositories.
 | `comparison.content_check_limit` | Upstream commits checked by content per comparison (1000); beyond it they are `UNKNOWN` |
 | `security.osv` | OSV.dev lookups: on/off, URL, timeout, cache TTL |
 | `private_repository_patterns` | Default private patterns for the `auto` backend |
+| `patches` | `validation_commands` run in the patched tree before a patch branch may be pushed (empty: nothing is built or tested, and the tool says so), `validation_timeout_seconds` (900) - see [patch-workflow.md](patch-workflow.md#validation-build-or-test-the-patched-tree) |
 | `upstream_md_publish` | Branch template `upstream-metadata/{release}/{package}`, `exclude` (packages never proposed, with the reason - [below](#upstream_md_publishexclude)), `defer` (processed last: `openssl`, `linux`) |
 
 ### `upstream_md_publish.exclude`

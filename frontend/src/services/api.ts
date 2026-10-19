@@ -8,7 +8,8 @@ import type {
   Branch, CherryPickPreview, CherryPickRequest, CherryPickResult,
   ComparisonRequest, ComparisonResult, ContentBaseApprovalRequest,
   DebianRelease, HealthResponse,
-  ManualUpstreamRequest, Package, PublishResult, PullRequest, PullRequestRequest,
+  ManualUpstreamRequest, Package, PublishResult, PublishStatusReport, PullRequest,
+  PullRequestRequest,
   ReportFile, ResolutionEvidence, UpstreamMdDocument, UpstreamMdPrRequest,
   UpstreamMdRequest, UpstreamResolution,
 } from '../types/api'
@@ -150,6 +151,14 @@ export const api = {
   // a person to read, not an HTTP error.
   createUpstreamMdPr: (body: UpstreamMdPrRequest) =>
     post<PublishResult>('/upstream-md/pr', body, SLOW_TIMEOUT_MS),
+
+  // Where a pushed branch stands: on the fork, any PR opened from it (from git
+  // refs, no token needed), and its checks (API only). Lists remote refs, so it
+  // gets more than the quick budget.
+  publishStatus: (pkg: string, branch: string, base?: string) =>
+    request<PublishStatusReport>(
+      `/publish-status${query({ package: pkg, branch, base })}`, undefined, 120_000,
+    ),
 
   reports: () => request<ReportFile[]>('/reports'),
 

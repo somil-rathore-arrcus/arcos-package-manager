@@ -3,6 +3,7 @@ import type {
   DebianRelease, HealthResponse, Package, PublishResult, PullRequest,
   UpstreamMdDocument,
   UpstreamResolution,
+  PublishStatusReport,
 } from '../types/api'
 
 export const releases: DebianRelease[] = [
@@ -191,6 +192,24 @@ export const cleanPreview: CherryPickPreview = {
   message: 'All 1 commits apply cleanly.', workspace_removed: true,
   base_sha: '3b043f16bb8e'.padEnd(40, '0'), upstream_sha: null,
   base_moved: false, validated: true,
+  validation: {
+    configured: false, passed: null, runs: [],
+    message: 'No validation command is configured (patches.validation_commands in '
+      + 'config/settings.yaml), so nothing was built or tested.',
+  },
+}
+
+export const validationFailedPreview: CherryPickPreview = {
+  ...cleanPreview, outcome: 'VALIDATION_FAILED',
+  message: 'All 1 commits apply cleanly onto aminor at 3b043f16bb8e, but validation failed.',
+  validation: {
+    configured: true, passed: false,
+    message: '`debian/rules build` exited with status 2; nothing may be pushed until validation passes.',
+    runs: [{
+      command: 'debian/rules build', exit_code: 2, timed_out: false,
+      duration_seconds: 4.2, output: 'make: *** [build] Error 2',
+    }],
+  },
 }
 
 export const conflictPreview: CherryPickPreview = {
@@ -204,6 +223,25 @@ export const cherryPickResult: CherryPickResult = {
   new_branch: 'upstream/pyrad/20260923-000000', applied: [criticalCommit.sha],
   base_sha: '3b043f16bb8e'.padEnd(40, '0'), head_sha: 'b'.repeat(40), pushed: true, conflicts: [], failed_sha: null,
   message: 'Applied 1 commits to upstream/pyrad/20260923-000000.',
+  commits: [{ sha: criticalCommit.sha, subject: 'fix overflow', author: 'u', date: '' }],
+  validation: cleanPreview.validation,
+  pr_title: 'pyrad: pull 1 upstream commit(s) into aminor',
+  pr_body: 'Problem Description :\nmissing\n\nRoot Cause :\ndiverged\n\nFix Details :\ncherry-picks',
+  pr_create_url: 'https://github.com/Arrcus/pyrad/compare/aminor...upstream/pyrad/20260923-000000'
+    + '?quick_pull=1&title=pyrad&body=Problem',
+}
+
+// The branch is on the fork; no PR yet, and no API access to read checks.
+export const publishStatusNoToken: PublishStatusReport = {
+  package: 'pyrad', repository: 'Arrcus/pyrad',
+  head_branch: 'upstream/pyrad/20260923-000000', base_branch: 'aminor',
+  branch_exists: true, head_sha: 'b'.repeat(40), pull_requests: [],
+  pull_request: null, api_access: false,
+  ci: {
+    state: 'UNAVAILABLE', sha: 'b'.repeat(40), checks: [],
+    reason: 'Check results are only available through the GitHub API, and no API '
+      + 'credential is configured (APM_GITHUB_TOKEN is empty).',
+  },
 }
 
 export const pullRequest: PullRequest = {

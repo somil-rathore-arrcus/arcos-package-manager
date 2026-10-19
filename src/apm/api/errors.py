@@ -16,6 +16,7 @@ from ..domain.enums import ErrorCode
 from ..services.comparison_service import ComparisonError
 from ..services.github_service import GitHubError
 from ..services.patch_service import PatchError
+from ..services.publish_status import PublishStatusError
 from ..services.upstream_md_publisher import PublishError
 from ..services.upstream_service import UpstreamServiceError
 
@@ -42,6 +43,7 @@ STATUS = {
 
 HANDLED = (
     ComparisonError, PatchError, GitHubError, UpstreamServiceError, PublishError,
+    PublishStatusError,
 )
 
 

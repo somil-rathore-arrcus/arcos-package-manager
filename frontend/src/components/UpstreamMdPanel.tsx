@@ -1,4 +1,5 @@
 import type { PublishResult, PullRequest, UpstreamMdDocument } from '../types/api'
+import { PublishStatusPanel } from './PublishStatusPanel'
 import { Badge, Card, Definition, ExternalLink } from './ui'
 
 const TONE: Record<string, string> = {
@@ -40,13 +41,14 @@ export function UpstreamMdPanel({
 
   return (
     <Card
-      title="debian/upstream.md"
+      title="Metadata PR · debian/upstream.md"
       actions={document && <Badge tone={TONE[document.outcome]}>{document.outcome}</Badge>}
     >
       <p className="small muted" style={{ marginTop: 0 }}>
-        Generated from the verified resolution above, so the committed record and
-        this dashboard cannot disagree. Generating and dry runs write nothing to
-        the repository.
+        Proposes one file, <code>debian/upstream.md</code>, recording the verified
+        upstream - no code changes. Generated from the verified resolution above,
+        so the committed record and this dashboard cannot disagree. Generating and
+        dry runs write nothing to the repository.
       </p>
 
       <div className="actions">
@@ -145,6 +147,13 @@ export function UpstreamMdPanel({
         <div className="alert info" style={{ marginTop: 12 }}>
           <p><ExternalLink href={pullRequest.url}>{pullRequest.url}</ExternalLink></p>
         </div>
+      )}
+
+      {pushed && (
+        <PublishStatusPanel pkg={pushed.package} branch={pushed.branch} base={pushed.base_branch} />
+      )}
+      {!pushed && document && pullRequest?.head && (
+        <PublishStatusPanel pkg={document.package} branch={pullRequest.head} base={pullRequest.base} />
       )}
     </Card>
   )

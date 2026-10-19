@@ -257,3 +257,134 @@ def test_the_link_honours_another_web_host():
     link, _ = pull_request_link("o/r", "main", "upstream-metadata/x",
                                 web_url="https://ghe.example.com/")
     assert link == "https://ghe.example.com/o/r/compare/main...upstream-metadata/x?quick_pull=1"
+
+
+# -- CI status --------------------------------------------------------------------
+#
+# Only GitHub's own answer is ever a pass. No access, no permission, or no
+# answer is UNAVAILABLE; nothing reported yet is NONE.
+
+from apm.domain.enums import CiState  # noqa: E402
+from apm.domain.models import AppliedCommit, ValidationReport, ValidationRun  # noqa: E402
+
+
+def _ci(check_runs=(), statuses=(), runs_status=200, status_status=200):
+    def handler(request):
+        if request.url.path.endswith("/check-runs"):
+            return httpx.Response(runs_status, json={"check_runs": list(check_runs)}
+                                  if runs_status == 200 else {"message": "Forbidden"})
+        if request.url.path.endswith("/status"):
+            return httpx.Response(status_status, json={"statuses": list(statuses)})
+        return httpx.Response(404, json={"message": "Not Found"})
+    return _service(handler).ci_status("Arrcus/mstpd", "c" * 40)
+
+
+def _run(name, status="completed", conclusion="success"):
+    return {"name": name, "status": status, "conclusion": conclusion,
+            "html_url": f"https://github.com/Arrcus/mstpd/runs/{name}",
+            "output": {"title": f"{name} title"}}
+
+
+def test_without_a_token_checks_are_unavailable_not_passing():
+    status = GitHubService(token="").ci_status("Arrcus/mstpd", "c" * 40)
+    assert status.state is CiState.UNAVAILABLE
+    assert "APM_GITHUB_TOKEN" in status.reason and status.checks == []
+
+
+def test_every_check_passing_is_success():
+    status = _ci([_run("description"), _run("build", conclusion="skipped")],
+                 [{"context": "jenkins/jira", "state": "success",
+                   "target_url": "https://ci/1", "description": "ok"}])
+    assert status.state is CiState.SUCCESS
+    assert {c.name for c in status.checks} == {"description", "build", "jenkins/jira"}
+    assert status.checks[0].url.endswith("/description")
+
+
+def test_one_failed_check_fails_the_commit_even_while_others_run():
+    status = _ci([_run("description", conclusion="failure"),
+                  _run("build", status="in_progress", conclusion=None)])
+    assert status.state is CiState.FAILURE
+
+
+def test_a_failed_commit_status_fails_the_commit():
+    status = _ci([_run("description")],
+                 [{"context": "jenkins/jira", "state": "error"}])
+    assert status.state is CiState.FAILURE
+
+
+def test_a_running_check_is_pending():
+    status = _ci([_run("description"), _run("build", status="queued", conclusion=None)])
+    assert status.state is CiState.PENDING
+
+
+def test_nothing_reported_is_none_not_success():
+    assert _ci().state is CiState.NONE
+
+
+def test_a_token_that_cannot_read_checks_is_unavailable():
+    status = _ci(runs_status=403)
+    assert status.state is CiState.UNAVAILABLE
+    assert "403" in status.reason
+
+
+def test_github_unreachable_is_unavailable():
+    def handler(request):
+        raise httpx.ConnectTimeout("timed out")
+    status = _service(handler).ci_status("Arrcus/mstpd", "c" * 40)
+    assert status.state is CiState.UNAVAILABLE
+    assert "could not be reached" in status.reason
+
+
+# -- patch pull request description -----------------------------------------------
+
+def _patch_result(**extra):
+    return CherryPickResult(
+        outcome=PreviewOutcome.CLEAN, package="demo", base_branch="aminor",
+        new_branch="upstream/demo/1", applied=["a" * 40, "b" * 40],
+        base_sha="3" * 40,
+        commits=[AppliedCommit(sha="a" * 40, subject="fix overflow"),
+                 AppliedCommit(sha="b" * 40, subject="tidy")],
+        **extra,
+    )
+
+
+def _patch_resolution():
+    return UpstreamResolution(
+        package="demo", debian_release="bookworm",
+        status=ResolutionStatus.VERIFIED,
+        upstream_repository=Repository(url="https://github.com/u/d.git"),
+        upstream_ref="master", merge_base="9" * 40,
+    )
+
+
+def test_patch_pr_body_starts_with_the_sections_arcos_ci_requires():
+    body = build_patch_pr_body(_patch_resolution(), _patch_result())
+    lines = body.splitlines()
+    assert lines[0] == "Problem Description :" and len(lines[1]) > 2
+    for heading in ("Root Cause :", "Fix Details :"):
+        i = lines.index(heading)
+        assert len(lines[i + 1]) > 2
+    assert "999999999999" in body  # the merge base
+    assert "33333333" in body      # the base the branch was built on
+
+
+def test_patch_pr_body_links_each_upstream_commit():
+    body = build_patch_pr_body(_patch_resolution(), _patch_result())
+    assert f"https://github.com/u/d/commit/{'a' * 40}" in body
+    assert "fix overflow" in body and "tidy" in body
+
+
+def test_patch_pr_body_says_when_nothing_was_validated():
+    body = build_patch_pr_body(_patch_resolution(), _patch_result(
+        validation=ValidationReport(configured=False, message="none")))
+    assert "nothing was built or tested" in body
+
+
+def test_patch_pr_body_reports_each_validation_command():
+    validation = ValidationReport(
+        configured=True, passed=True, message="All 1 validation command(s) passed.",
+        runs=[ValidationRun(command="debian/rules build", exit_code=0,
+                            duration_seconds=12.5)])
+    body = build_patch_pr_body(_patch_resolution(), _patch_result(validation=validation))
+    assert "`debian/rules build` — exit 0 (12.5s)" in body
+    assert "All 1 validation command(s) passed." in body

@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from .enums import (
+    CiState,
     CommitClass,
     Criticality,
     PackageCategory,
@@ -611,6 +612,38 @@ class FileChange(BaseModel):
     deletions: int = 0
 
 
+class ValidationRun(BaseModel):
+    """One configured validation command, run in the patch workspace."""
+
+    command: str
+    exit_code: Optional[int] = None
+    timed_out: bool = False
+    duration_seconds: float = 0.0
+    output: str = Field("", description="The tail of stdout and stderr.")
+
+
+class ValidationReport(BaseModel):
+    """What was built or tested on the patched tree - or that nothing was.
+
+    `passed` is None when no command is configured: nothing was checked, which
+    is not the same as passing.
+    """
+
+    configured: bool = False
+    passed: Optional[bool] = None
+    runs: List[ValidationRun] = Field(default_factory=list)
+    message: str = ""
+
+
+class AppliedCommit(BaseModel):
+    """An upstream commit in the patch series, as git records it."""
+
+    sha: str
+    subject: str = ""
+    author: str = ""
+    date: str = ""
+
+
 class CherryPickPreview(BaseModel):
     """What applying the selection would do, worked out without touching it."""
 
@@ -634,6 +667,7 @@ class CherryPickPreview(BaseModel):
         False, description="The target branch is not the commit the "
                            "comparison was computed against."
     )
+    validation: Optional[ValidationReport] = None
     validated: bool = Field(
         False, description="Every selected commit was re-checked against the "
                            "current target tip and upstream ref."
@@ -652,6 +686,62 @@ class CherryPickResult(BaseModel):
     conflicts: List[str] = Field(default_factory=list)
     failed_sha: Optional[str] = None
     message: Optional[str] = None
+    commits: List[AppliedCommit] = Field(default_factory=list)
+    validation: Optional[ValidationReport] = None
+    pr_title: str = Field("", description="The title a pull request for this "
+                                          "branch should carry.")
+    pr_body: str = Field("", description="Its description, with the sections "
+                                         "ARCoS CI requires.")
+    pr_create_url: Optional[str] = Field(
+        None, description="GitHub's pre-filled 'open a pull request' page, once "
+                          "the branch is pushed. For opening it without a token.",
+    )
+
+
+class CheckRun(BaseModel):
+    """One check run or commit status on a commit."""
+
+    name: str
+    status: str = ""
+    conclusion: Optional[str] = None
+    url: Optional[str] = None
+    summary: str = ""
+
+
+class CiStatus(BaseModel):
+    state: CiState
+    sha: Optional[str] = None
+    checks: List[CheckRun] = Field(default_factory=list)
+    reason: str = ""
+
+
+class DetectedPullRequest(BaseModel):
+    """A pull request whose head is a given commit, found from the fork's
+    refs/pull/<n>/head over git - which needs no API access."""
+
+    number: int
+    url: str
+
+
+class PublishStatusReport(BaseModel):
+    """Where a pushed branch stands: on the fork, in a pull request, in CI."""
+
+    package: str
+    repository: str
+    head_branch: str
+    base_branch: str = ""
+    branch_exists: bool = False
+    head_sha: Optional[str] = None
+    pull_requests: List[DetectedPullRequest] = Field(
+        default_factory=list,
+        description="Pull requests opened from the branch's commit, read from git refs.",
+    )
+    pull_request: Optional["PullRequest"] = Field(
+        None, description="The pull request as the GitHub API reports it; only "
+                          "with API access.",
+    )
+    api_access: bool = False
+    ci: CiStatus
 
 
 class PullRequest(BaseModel):

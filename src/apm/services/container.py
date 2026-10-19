@@ -29,6 +29,7 @@ from .mapping_store import MappingStore
 from .metadata_batch_service import MetadataBatchService
 from .patch_id_service import PatchIdService
 from .patch_service import PatchService
+from .publish_status import PublishStatusService
 from .security_service import (
     DebianSecurityProvider, OsvSecurityProvider, SecurityService,
 )
@@ -137,7 +138,12 @@ class Container:
             debian_patches=self.debian_patches_for,
             store=self.comparison_store,
         )
-        self.patches = PatchService(self.workspaces)
+        patches = self.settings.patches
+        self.patches = PatchService(
+            self.workspaces,
+            validation_commands=patches["validation_commands"],
+            validation_timeout=patches["validation_timeout"],
+        )
         self.upstream_md = UpstreamMdService()
         self.metadata_batch = MetadataBatchService(
             self.upstream_md, workspaces=self.workspaces
@@ -146,6 +152,10 @@ class Container:
             token=self.environment.github_token,
             api_url=self.environment.github_api_url,
             timeout=self.environment.http_timeout,
+        )
+        self.publish_status = PublishStatusService(
+            self.transports, self.github,
+            timeout=self.environment.git_long_timeout,
         )
         publish = self.settings.upstream_md_publish
         self.publisher = UpstreamMdPublisher(
@@ -176,6 +186,11 @@ class Container:
         return {
             "read_private_repositories": self.private_access(),
             "create_pull_requests": self.github.can_create_pull_requests,
+            # Checks are readable only through the API; a pull request opened
+            # from a pushed branch is found from git refs either way.
+            "read_checks": self.github.can_create_pull_requests,
+            "detect_pull_requests": "git refs over SSH",
+            "patch_validation_commands": len(self.settings.patches["validation_commands"]),
             "git": self.transports.describe(),
             "workspace_root": self.workspaces.root,
             "mapping": self.mapping.describe(),

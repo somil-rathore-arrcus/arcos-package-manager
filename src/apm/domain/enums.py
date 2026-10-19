@@ -187,6 +187,24 @@ class PreviewOutcome(str, Enum):
     CONFLICT = "CONFLICT"
     EMPTY = "EMPTY"
     FAILED = "FAILED"
+    # Applied cleanly, but a configured validation command failed: nothing is
+    # pushed until it passes.
+    VALIDATION_FAILED = "VALIDATION_FAILED"
+
+
+class CiState(str, Enum):
+    """A commit's checks as GitHub reports them, or why they cannot be read.
+
+    UNAVAILABLE is never a pass: it means the checks could not be read (no
+    API access, no permission, GitHub unreachable), and says nothing about
+    whether they passed.
+    """
+
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    PENDING = "PENDING"
+    NONE = "NONE"
+    UNAVAILABLE = "UNAVAILABLE"
 
 
 class UpstreamMdOutcome(str, Enum):

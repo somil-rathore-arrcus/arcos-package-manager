@@ -150,6 +150,16 @@ private_repository_patterns:
   - "github\\.com[:/]+arrcus/"
 
 # apm publish-upstream-md: proposing debian/upstream.md to each package.
+patches:
+  # Commands run, in order, in the patched working tree after the selected
+  # commits apply cleanly - in the preview, and again before the branch is
+  # pushed. A failing command blocks the push. Each runs with the tree as its
+  # working directory and must finish within the timeout. Empty means nothing
+  # is built or tested, and the preview and the pull request say exactly that.
+  # Example: ["dpkg-source --before-build .", "debian/rules build"]
+  validation_commands: []
+  validation_timeout_seconds: 900
+
 upstream_md_publish:
   # Every branch this workflow creates lives under upstream-metadata/; the
   # publisher refuses any other name, and any name equal to the target branch.

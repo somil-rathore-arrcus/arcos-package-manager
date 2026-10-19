@@ -12,6 +12,11 @@ Two operations, deliberately separate:
 A conflict stops the series at the commit that conflicted and reports it. It is
 never resolved automatically: picking a side of a conflict is a decision about
 the product, and guessing it silently is how wrong code reaches a release.
+
+A clean series is then validated: the configured commands (settings.yaml
+patches.validation_commands) run in the patched tree, in the preview and again
+before a push, and a failure stops the push. With none configured the result
+says nothing was built or tested - never that it passed.
 """
 
 from __future__ import annotations
@@ -19,12 +24,14 @@ from __future__ import annotations
 import logging
 import re
 import shlex
+import time
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from ..domain.enums import ErrorCode, PreviewOutcome
 from ..domain.models import (
-    CherryPickPreview, CherryPickResult, FileChange, PatchSelection,
+    AppliedCommit, CherryPickPreview, CherryPickResult, FileChange,
+    PatchSelection, ValidationReport, ValidationRun,
 )
 from ..gitio.workspace import (
     ARCOS_REMOTE, UPSTREAM_REMOTE, GitWorkspace, GitWorkspaceError,
@@ -34,6 +41,13 @@ log = logging.getLogger(__name__)
 
 DEFAULT_BRANCH_TEMPLATE = "upstream/{package}/{timestamp}"
 _SAFE_BRANCH = re.compile(r"[^A-Za-z0-9._/-]+")
+# Enough of a failing build's output to see why, without shipping megabytes.
+_OUTPUT_TAIL = 4000
+NOT_CONFIGURED = (
+    "No validation command is configured (patches.validation_commands in "
+    "config/settings.yaml), so nothing was built or tested."
+)
+_EXIT_MARKER = "__apm_validation_exit="
 
 
 class PatchError(RuntimeError):
@@ -44,10 +58,13 @@ class PatchError(RuntimeError):
 
 
 class PatchService:
-    def __init__(self, workspaces, branch_template: str = DEFAULT_BRANCH_TEMPLATE
-                 ) -> None:
+    def __init__(self, workspaces, branch_template: str = DEFAULT_BRANCH_TEMPLATE,
+                 validation_commands: Optional[List[str]] = None,
+                 validation_timeout: int = 900) -> None:
         self.workspaces = workspaces
         self.branch_template = branch_template
+        self.validation_commands = list(validation_commands or [])
+        self.validation_timeout = validation_timeout
 
     # -- naming ------------------------------------------------------------
 
@@ -196,6 +213,63 @@ class PatchService:
             return applied, sha, conflicts, result.stderr.strip()
         return applied, None, [], ""
 
+    def _run_validation(self, workspace: GitWorkspace) -> ValidationReport:
+        """Run the configured commands in the patched tree; stop at the first
+        failure. Commands come from settings.yaml only, never from a request."""
+        if not self.validation_commands:
+            return ValidationReport(configured=False, passed=None,
+                                    message=NOT_CONFIGURED)
+        runs: List[ValidationRun] = []
+        for command in self.validation_commands:
+            started = time.monotonic()
+            # The real exit status, reported on a marker line: the transport
+            # only says whether the command succeeded.
+            result = workspace.shell(
+                f"( {command} ); __rc=$?; echo \"{_EXIT_MARKER}$__rc\" >&2; "
+                f"exit $__rc",
+                timeout=self.validation_timeout,
+            )
+            exit_code, stderr = _exit_code(result.stderr)
+            output = (result.stdout + stderr).strip()
+            timed_out = exit_code is None and "timed out after" in result.stderr
+            runs.append(ValidationRun(
+                command=command,
+                exit_code=exit_code,
+                timed_out=timed_out,
+                duration_seconds=round(time.monotonic() - started, 1),
+                output=output[-_OUTPUT_TAIL:],
+            ))
+            if not result.ok:
+                why = (f"timed out after {self.validation_timeout}s"
+                       if timed_out else f"exited with status {exit_code}")
+                return ValidationReport(
+                    configured=True, passed=False, runs=runs,
+                    message=f"`{command}` {why}; nothing may be pushed until "
+                            f"validation passes.",
+                )
+        return ValidationReport(
+            configured=True, passed=True, runs=runs,
+            message=f"All {len(runs)} validation command(s) passed.",
+        )
+
+    def _describe(self, workspace: GitWorkspace, shas: List[str]) -> List[AppliedCommit]:
+        """Subject, author and date of each applied upstream commit, for the
+        pull request and the dashboard. Best effort: a commit git cannot show
+        is listed by its SHA alone."""
+        if not shas:
+            return []
+        result = workspace.shell(
+            "git show -s --format=%H%x1f%an%x1f%aI%x1f%s "
+            + " ".join(shlex.quote(s) for s in shas)
+        )
+        found = {}
+        for line in result.stdout.splitlines():
+            parts = line.split("\x1f")
+            if len(parts) == 4:
+                found[parts[0]] = AppliedCommit(
+                    sha=parts[0], author=parts[1], date=parts[2], subject=parts[3])
+        return [found.get(sha) or AppliedCommit(sha=sha) for sha in shas]
+
     # -- preview -----------------------------------------------------------
 
     def preview(self, selection: PatchSelection, arcos_repository: str,
@@ -250,9 +324,20 @@ class PatchService:
                 FileChange(**change)
                 for change in workspace.show_stat(f"{base}..HEAD")
             ]
+            validation = self._run_validation(workspace)
+            if validation.passed is False:
+                return CherryPickPreview(
+                    outcome=PreviewOutcome.VALIDATION_FAILED, applied=applied,
+                    files_changed=changes, warnings=checks,
+                    validation=validation,
+                    message=(f"All {len(applied)} commits apply cleanly onto "
+                             f"{selection.arcos_branch} at {base[:12]}, but "
+                             f"validation failed: {validation.message}"),
+                    **common,
+                )
             return CherryPickPreview(
                 outcome=PreviewOutcome.CLEAN, applied=applied,
-                files_changed=changes, warnings=checks,
+                files_changed=changes, warnings=checks, validation=validation,
                 message=(f"All {len(applied)} commits apply cleanly onto "
                          f"{selection.arcos_branch} at {base[:12]}."),
                 **common,
@@ -327,6 +412,22 @@ class PatchService:
                 ),
             )
 
+        try:
+            commits = self._describe(workspace, applied)
+            validation = self._run_validation(workspace)
+        except BaseException:
+            workspace.destroy()
+            raise
+        if validation.passed is False:
+            workspace.destroy()
+            return CherryPickResult(
+                outcome=PreviewOutcome.VALIDATION_FAILED, package=selection.package,
+                base_branch=base_branch, new_branch=new_branch, applied=applied,
+                base_sha=base, commits=commits, validation=validation,
+                message=(f"Validation failed; nothing was pushed and the "
+                         f"workspace was discarded. {validation.message}"),
+            )
+
         head = workspace.rev_parse("HEAD")
         pushed = False
         if push:
@@ -347,9 +448,23 @@ class PatchService:
         return CherryPickResult(
             outcome=PreviewOutcome.CLEAN, package=selection.package,
             base_branch=base_branch, new_branch=new_branch, applied=applied,
-            base_sha=base, head_sha=head, pushed=pushed,
+            base_sha=base, head_sha=head, pushed=pushed, commits=commits,
+            validation=validation,
             message=f"Applied {len(applied)} commits to {new_branch}.",
         )
+
+
+def _exit_code(stderr: str):
+    """(exit status, stderr without the marker line); None when the command
+    never reported one - it was killed or timed out."""
+    code, kept = None, []
+    for line in stderr.splitlines():
+        if line.startswith(_EXIT_MARKER):
+            value = line[len(_EXIT_MARKER):].strip()
+            code = int(value) if value.isdigit() else None
+        else:
+            kept.append(line)
+    return code, "\n".join(kept)
 
 
 def _expand(sha: str, candidates) -> Optional[str]:

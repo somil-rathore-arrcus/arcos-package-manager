@@ -169,3 +169,91 @@ def test_missing_base_branch_is_reported(world):
             branch_name="upstream/demo/x", base_ref="no-such-branch",
         )
     assert excinfo.value.code is ErrorCode.BRANCH_NOT_FOUND
+
+
+# -- validation ------------------------------------------------------------------
+#
+# The configured commands run in the patched tree. Nothing configured must read
+# as "not checked", never as a pass, and a failing command must stop the push.
+
+def _validating(tmp_path, commands, timeout=60) -> PatchService:
+    return PatchService(
+        WorkspaceManager(
+            Transports(backend="local"),
+            root=str(tmp_path / "workspaces"),
+            private_url_hint="file:///local",
+        ),
+        validation_commands=commands, validation_timeout=timeout,
+    )
+
+
+def test_without_validation_commands_nothing_claims_to_have_passed(world):
+    preview = _service(world["root"]).preview(
+        _selection(world, [world["shas"]["D"]]), str(world["arcos"])
+    )
+    assert preview.outcome is PreviewOutcome.CLEAN
+    assert preview.validation.configured is False
+    assert preview.validation.passed is None
+    assert "nothing was built or tested" in preview.validation.message
+
+
+def test_validation_runs_in_the_patched_tree(world):
+    """E.txt exists only once E is applied, so passing proves the command saw
+    the patched tree, not the target branch."""
+    preview = _validating(world["root"], ["test -f E.txt", "grep -q E E.txt"]).preview(
+        _selection(world, [world["shas"]["D"], world["shas"]["E"]]), str(world["arcos"])
+    )
+    assert preview.outcome is PreviewOutcome.CLEAN
+    assert preview.validation.passed is True
+    assert [r.exit_code for r in preview.validation.runs] == [0, 0]
+
+
+def test_a_failing_validation_is_reported_with_its_real_exit_status(world):
+    preview = _validating(
+        world["root"], ["echo building; echo 'error: broken' >&2; exit 3", "true"],
+    ).preview(_selection(world, [world["shas"]["D"]]), str(world["arcos"]))
+    assert preview.outcome is PreviewOutcome.VALIDATION_FAILED
+    assert preview.validation.passed is False
+    [run] = preview.validation.runs  # stops at the first failure
+    assert run.exit_code == 3 and not run.timed_out
+    assert "building" in run.output and "error: broken" in run.output
+    assert "__apm_validation_exit" not in run.output
+    assert "exited with status 3" in preview.validation.message
+
+
+def test_a_validation_that_overruns_times_out_and_fails(world):
+    preview = _validating(world["root"], ["sleep 5"], timeout=1).preview(
+        _selection(world, [world["shas"]["D"]]), str(world["arcos"])
+    )
+    assert preview.outcome is PreviewOutcome.VALIDATION_FAILED
+    [run] = preview.validation.runs
+    assert run.timed_out is True and run.exit_code is None
+    assert "timed out" in preview.validation.message
+
+
+def test_a_failing_validation_blocks_the_push(world):
+    bare = world["root"] / "arcos-bare-validation.git"
+    fx.git(world["root"], "clone", "-q", "--bare", str(world["arcos"]), str(bare))
+
+    result = _validating(world["root"], ["false"]).cherry_pick(
+        _selection(world, [world["shas"]["D"]]), str(world["arcos"]),
+        branch_name="upstream/demo/unvalidated", push=True, push_url=str(bare),
+    )
+    assert result.outcome is PreviewOutcome.VALIDATION_FAILED
+    assert result.pushed is False and result.head_sha is None
+    assert fx.git(bare, "branch", "--list", "upstream/*") == ""
+
+
+def test_a_validated_push_records_what_was_applied_and_checked(world):
+    bare = world["root"] / "arcos-bare-validated.git"
+    fx.git(world["root"], "clone", "-q", "--bare", str(world["arcos"]), str(bare))
+
+    result = _validating(world["root"], ["test -f shared.txt"]).cherry_pick(
+        _selection(world, [world["shas"]["D"]]), str(world["arcos"]),
+        branch_name="upstream/demo/validated", push=True, push_url=str(bare),
+    )
+    assert result.outcome is PreviewOutcome.CLEAN and result.pushed is True
+    assert result.validation.passed is True
+    [commit] = result.commits
+    assert commit.sha == world["shas"]["D"] and commit.subject == "commit D"
+    assert commit.author and commit.date

@@ -103,6 +103,17 @@ class Settings:
             "defer": list(block.get("defer") or []),
         }
 
+    @property
+    def patches(self) -> dict:
+        """Validation commands run on a patched tree before it may be pushed."""
+        block = self.raw.get("patches", {}) or {}
+        return {
+            "validation_commands": [
+                str(c) for c in (block.get("validation_commands") or []) if str(c).strip()
+            ],
+            "validation_timeout": int(block.get("validation_timeout_seconds", 900)),
+        }
+
     def is_vendor(self, name: str) -> bool:
         patterns = self.raw.get("classification", {}).get("vendor_patterns", [])
         return any(re.search(p, name) for p in patterns)
