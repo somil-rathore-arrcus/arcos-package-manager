@@ -536,6 +536,7 @@ def _to_pull_request(payload: dict, already_existed: bool = False) -> PullReques
         body=payload.get("body") or "",
         base=(payload.get("base") or {}).get("ref", ""),
         head=(payload.get("head") or {}).get("ref", ""),
+        head_sha=(payload.get("head") or {}).get("sha"),
         draft=bool(payload.get("draft")),
         already_existed=already_existed,
     )

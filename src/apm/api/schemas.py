@@ -110,7 +110,10 @@ class UpstreamMdPrRequest(BaseModel):
     arcos_branch: Optional[str] = None
     branch_name: Optional[str] = Field(
         None,
-        description="Must be under upstream-metadata/ and not the target branch.",
+        description=(
+            "Must be debian-upstream-tracking, or under upstream-metadata/ or "
+            "debian-upstream-tracking/, and not the target branch."
+        ),
     )
     draft: bool = False
     dry_run: bool = Field(

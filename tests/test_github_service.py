@@ -173,7 +173,10 @@ def test_find_pull_request_can_include_closed_ones():
 
     def handler(request):
         seen.update(request.url.params)
-        return httpx.Response(200, json=[{**PR_PAYLOAD, "state": "closed"}])
+        return httpx.Response(200, json=[{
+            **PR_PAYLOAD, "state": "closed",
+            "head": {"ref": "upstream-metadata/bookworm/mstpd", "sha": "c5b5" * 10},
+        }])
 
     pr = _service(handler).find_pull_request(
         "Arrcus/mstpd", "upstream-metadata/bookworm/mstpd", "aminor", state="all",
@@ -181,6 +184,8 @@ def test_find_pull_request_can_include_closed_ones():
     assert seen["state"] == "all"
     assert seen["head"] == "Arrcus:upstream-metadata/bookworm/mstpd"
     assert pr.state == "closed"
+    # A name every proposal in a repository shares is matched by this commit.
+    assert pr.head_sha == "c5b5" * 10
 
 
 def test_a_merged_pull_request_is_not_reported_as_closed():

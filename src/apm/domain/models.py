@@ -752,6 +752,7 @@ class PullRequest(BaseModel):
     body: str = ""
     base: str = ""
     head: str = ""
+    head_sha: Optional[str] = None
     draft: bool = False
     already_existed: bool = False
 

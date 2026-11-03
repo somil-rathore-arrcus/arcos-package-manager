@@ -26,6 +26,30 @@ const QUICK_TIMEOUT_MS = 30_000
 // timeout instead of the backend's explicit TIMEOUT and its explanation.
 const SLOW_TIMEOUT_MS = 20 * 60_000
 
+// This deployment's own API token (APM_API_TOKEN), typed by the person using
+// the dashboard when a write first asks for it. It is kept for this browser tab
+// only and sent only to this API; it is never part of the built code.
+const TOKEN_KEY = 'apm.apiToken'
+let tokenInMemory = ''
+
+export function apiToken(): string {
+  try {
+    return sessionStorage.getItem(TOKEN_KEY) ?? tokenInMemory
+  } catch {
+    return tokenInMemory
+  }
+}
+
+export function setApiToken(token: string): void {
+  tokenInMemory = token
+  try {
+    if (token) sessionStorage.setItem(TOKEN_KEY, token)
+    else sessionStorage.removeItem(TOKEN_KEY)
+  } catch {
+    // Storage is unavailable here; the in-memory copy serves this page.
+  }
+}
+
 export class ApiError extends Error {
   code: string
   detail?: string | null
@@ -47,8 +71,12 @@ async function request<T>(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
+    const token = apiToken()
     response = await fetch(`${BASE}${path}`, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       signal: controller.signal,
       ...init,
     })

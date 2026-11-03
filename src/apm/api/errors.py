@@ -19,6 +19,7 @@ from ..services.patch_service import PatchError
 from ..services.publish_status import PublishStatusError
 from ..services.upstream_md_publisher import PublishError
 from ..services.upstream_service import UpstreamServiceError
+from .deps import ApiAuthError
 
 log = logging.getLogger(__name__)
 
@@ -38,12 +39,13 @@ STATUS = {
     ErrorCode.INVALID_REF: 404,
     ErrorCode.STALE_SELECTION: 409,
     ErrorCode.BASE_MOVED: 409,
+    ErrorCode.API_TOKEN_REQUIRED: 401,
     ErrorCode.INTERNAL: 500,
 }
 
 HANDLED = (
     ComparisonError, PatchError, GitHubError, UpstreamServiceError, PublishError,
-    PublishStatusError,
+    PublishStatusError, ApiAuthError,
 )
 
 

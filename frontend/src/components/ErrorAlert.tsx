@@ -1,10 +1,14 @@
-import { ApiError } from '../services/api'
+import { useState } from 'react'
+
+import { ApiError, setApiToken } from '../services/api'
 
 // Each backend error code gets an explanation of what to actually do about it.
 // "Request failed" tells the user nothing they can act on.
 const GUIDANCE: Record<string, string> = {
   AUTH_REQUIRED:
-    'Set APM_GITHUB_TOKEN in the backend environment. The token needs repo scope, and SSO authorisation if the organisation uses SAML.',
+    'GitHub refused, or no GitHub credential is configured. If APM_GITHUB_TOKEN is empty, set it in the backend environment; if it is set, check it has not expired, can reach this repository with "Pull requests: Read and write", and is SSO-authorised. Without a token, push only and open the pull request from its link.',
+  API_TOKEN_REQUIRED:
+    'This deployment requires its own API token (APM_API_TOKEN) for actions that push, open a pull request or record an approval. Ask whoever runs it for the token and enter it below; it is kept for this browser tab only.',
   REPOSITORY_UNAVAILABLE:
     'The repository could not be reached. Check the SSH bridge configuration; for a private repository this is also what missing access looks like.',
   BRANCH_NOT_FOUND:
@@ -38,11 +42,38 @@ export function ErrorAlert({ error, onRetry }: { error: unknown; onRetry?: () =>
           <pre className="diff" style={{ marginTop: 6 }}>{api.detail}</pre>
         </details>
       )}
+      {code === 'API_TOKEN_REQUIRED' && <ApiTokenForm />}
       {onRetry && (
         <div className="actions" style={{ marginTop: 8 }}>
           <button onClick={onRetry}>Try again</button>
         </div>
       )}
     </div>
+  )
+}
+
+function ApiTokenForm() {
+  const [value, setValue] = useState('')
+  const [saved, setSaved] = useState(false)
+  return (
+    <form
+      className="actions" style={{ marginTop: 8 }}
+      onSubmit={(event) => {
+        event.preventDefault()
+        setApiToken(value.trim())
+        setValue('')
+        setSaved(true)
+      }}
+    >
+      <label>
+        API token{' '}
+        <input
+          type="password" autoComplete="off" value={value}
+          onChange={(event) => { setValue(event.target.value); setSaved(false) }}
+        />
+      </label>
+      <button type="submit" disabled={!value.trim()}>Use for this tab</button>
+      {saved && <span className="small">Saved. Repeat the action.</span>}
+    </form>
   )
 }

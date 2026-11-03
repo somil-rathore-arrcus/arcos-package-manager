@@ -6,7 +6,7 @@ to the **ARCoS package repository** - never to the upstream project:
 | | Example: `mstpd`, Bookworm |
 |---|---|
 | Repository | `Arrcus/mstpd` |
-| New branch | `upstream-metadata/bookworm/mstpd` |
+| New branch | `debian-upstream-tracking` ([Branch name](#branch-name)) |
 | Target (base) branch | `aminor` |
 | Change | one file: `debian/upstream.md` |
 | Commit title | `mstpd: add debian/upstream.md with verified upstream` |
@@ -102,7 +102,7 @@ The same for `--apply` and `--apply --push-only`: push-only is a real push.
    still be exactly what today's mapping renders. Otherwise: `DRIFT`.
 3. **Live reads.** The current tip of the target branch; whether the upstream
    ref still points at the commit the mapping recorded (if it moved: `DRIFT`);
-   whether `upstream-metadata/<release>/<package>` already exists. A branch
+   whether the package's branch ([Branch name](#branch-name)) already exists. A branch
    this tool pushed earlier must still hold the reviewed file (if it holds an
    older one: `DRIFT`). With a token, whether a pull request for the branch was
    already merged or closed (`PR_MERGED`, `PR_CLOSED`) - asked before the file
@@ -117,8 +117,8 @@ The same for `--apply` and `--apply --push-only`: push-only is a real push.
    with the tip as parent. Checks: the changed paths are exactly
    `debian/upstream.md`, `git diff --check` is clean, the parent is the tip.
    **A dry run stops here** with `DRY_RUN_OK`.
-6. **Push.** `<commit>:refs/heads/upstream-metadata/<release>/<package>`,
-   never forced, and verified afterwards with `ls-remote`.
+6. **Push.** `<commit>:refs/heads/<branch>`, never forced, and verified
+   afterwards with `ls-remote`.
 7. **Pull request** against the target branch (or the one already open for
    that branch). With `--push-only` no pull request is opened: the package
    ends as `BRANCH_PUSHED`, with a link to open the PR.
@@ -133,6 +133,40 @@ Packages are processed in plan order with `upstream_md_publish.defer`
 recorded and the run continues; `--stop-after-failures` consecutive failures
 stop it, because that usually means the token, the key or the network, not
 the package.
+
+## Branch name
+
+`upstream_md_publish.branch_template` in `config/settings.yaml` names the
+branch. It is `debian-upstream-tracking`, the name Lakshya asked for
+(2026-10-29): one branch in each package repository, pushed for review.
+
+| Convention | Example | Scope |
+|---|---|---|
+| `debian-upstream-tracking` (current) | `debian-upstream-tracking` | the whole repository |
+| `upstream-metadata/{release}/{package}` (earlier) | `upstream-metadata/bookworm/mstpd` | one release and package |
+
+The publisher refuses any branch outside these two conventions - also
+`debian-upstream-tracking/...` - and any name equal to the target, whatever
+the settings say; a bad template stops the service at start-up.
+
+- **Branches already pushed keep their name.** A package whose ledger records
+  a pushed branch or a pull request goes on using that branch, so changing the
+  template never leaves a second branch with the same file beside the first.
+  `mstpd`'s `upstream-metadata/bookworm/mstpd` is one.
+- **One proposal per repository at a time.** `debian-upstream-tracking` names
+  neither the release nor the package. When the branch already holds another
+  release's or package's proposal, the package ends `BRANCH_EXISTS` and names
+  the owner (`... holds this tool's proposal for mstpd (bookworm) ...`);
+  nothing is overwritten. Two packages built from one repository in the same
+  run (`ONL-standalone`, `ONL-xc`): the first in plan order takes the branch,
+  the others are refused before the confirmation count.
+- **Pull requests found by name.** GitHub finds a pull request by its head
+  branch's name, which this one shares with every proposal in the repository,
+  so an earlier merged or closed pull request counts only if its head is the
+  commit this package's record holds.
+- Git cannot hold both `debian-upstream-tracking` and
+  `debian-upstream-tracking/<x>` in one repository; mixing the two templates
+  ends in `PUSH_FAILED` with git's message.
 
 ## Statuses
 
@@ -371,7 +405,7 @@ Check the ledger's invariants after a run:
 docker compose exec app python scripts/verify_pr_ledger.py bookworm
 ```
 
-It checks that every branch is under `upstream-metadata/`, none equals its
+It checks that every branch is one this workflow creates, none equals its
 target, every opened PR has a pushed commit and a URL, every pushed entry names
 a full commit SHA, and every `BRANCH_PUSHED` entry was pushed, has a full
 40-character commit and a `pr_create_url` starting with

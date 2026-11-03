@@ -27,7 +27,10 @@ from .github_service import GitHubError, repo_slug
 log = logging.getLogger(__name__)
 
 # Branches this tool creates: debian/upstream.md proposals and patch series.
-_OWN_BRANCH = re.compile(r"^(upstream-metadata|upstream)/[A-Za-z0-9._/-]+$")
+_OWN_BRANCH = re.compile(
+    r"^(?:(?:upstream-metadata|upstream)/[A-Za-z0-9._/-]+"
+    r"|debian-upstream-tracking(?:/[A-Za-z0-9._/-]+)?)$"
+)
 _PULL_HEAD = re.compile(r"^refs/pull/(\d+)/head$")
 
 
@@ -44,8 +47,8 @@ def validate_own_branch(branch: str) -> None:
     if not _OWN_BRANCH.match(branch or "") or ".." in branch:
         raise PublishStatusError(
             ErrorCode.INVALID_REQUEST,
-            f"{branch!r} is not a branch this tool creates (upstream-metadata/... "
-            f"or upstream/...).",
+            f"{branch!r} is not a branch this tool creates (upstream-metadata/..., "
+            f"debian-upstream-tracking or upstream/...).",
         )
 
 

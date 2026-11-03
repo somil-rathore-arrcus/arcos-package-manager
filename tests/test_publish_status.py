@@ -132,3 +132,18 @@ def test_a_non_github_repository_is_refused():
     with pytest.raises(PublishStatusError):
         service.status(package="x", repository_url="https://salsa.debian.org/x.git",
                        branch=BRANCH)
+
+
+@pytest.mark.parametrize("branch", [
+    "debian-upstream-tracking", "debian-upstream-tracking/trixie",
+])
+def test_the_repository_wide_tracking_branch_can_be_looked_up(branch):
+    validate_own_branch(branch)
+
+
+@pytest.mark.parametrize("branch", [
+    "debian-upstream-trackingx", "debian-upstream-tracking/../aminor",
+])
+def test_near_misses_of_the_tracking_branch_are_refused(branch):
+    with pytest.raises(PublishStatusError):
+        validate_own_branch(branch)

@@ -24,6 +24,14 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+
+def metadata_branch(name: str) -> bool:
+    """debian-upstream-tracking, or a name under it or upstream-metadata/: the
+    publisher's rule, restated rather than imported."""
+    return name == "debian-upstream-tracking" or any(
+        name.startswith(prefix) and len(name) > len(prefix)
+        for prefix in ("debian-upstream-tracking/", "upstream-metadata/"))
+
 ROOT = Path(__file__).resolve().parents[1]
 
 SOURCE = "Upstream Source"
@@ -218,9 +226,9 @@ def main(release: str) -> int:
               ", ".join(bad_base))
         outside = [
             e["package"] for e in plan["entries"]
-            if not e["branch"].startswith("upstream-metadata/")
+            if not metadata_branch(e["branch"])
         ]
-        check("every planned branch is under upstream-metadata/", not outside,
+        check("every planned branch is one this workflow creates", not outside,
               ", ".join(outside))
 
         recorded = []

@@ -33,7 +33,9 @@ from .publish_status import PublishStatusService
 from .security_service import (
     DebianSecurityProvider, OsvSecurityProvider, SecurityService,
 )
-from .upstream_md_publisher import BRANCH_TEMPLATE, UpstreamMdPublisher
+from .upstream_md_publisher import (
+    BRANCH_TEMPLATE, UpstreamMdPublisher, validate_template,
+)
 from .upstream_md_service import UpstreamMdService
 from .upstream_service import UpstreamService
 
@@ -145,8 +147,13 @@ class Container:
             validation_timeout=patches["validation_timeout"],
         )
         self.upstream_md = UpstreamMdService()
+        publish = self.settings.upstream_md_publish
+        # One template for the plan and the push, checked before either runs.
+        branch_template = validate_template(
+            publish["branch_template"] or BRANCH_TEMPLATE)
         self.metadata_batch = MetadataBatchService(
-            self.upstream_md, workspaces=self.workspaces
+            self.upstream_md, workspaces=self.workspaces,
+            branch_template=branch_template,
         )
         self.github = GitHubService(
             token=self.environment.github_token,
@@ -157,12 +164,11 @@ class Container:
             self.transports, self.github,
             timeout=self.environment.git_long_timeout,
         )
-        publish = self.settings.upstream_md_publish
         self.publisher = UpstreamMdPublisher(
             self.workspaces, self.github,
             author_name=self.environment.committer_name,
             author_email=self.environment.committer_email,
-            branch_template=publish["branch_template"] or BRANCH_TEMPLATE,
+            branch_template=branch_template,
             exclude=publish["exclude"],
             defer=publish["defer"],
         )
@@ -181,9 +187,15 @@ class Container:
                               resolution.debian_release, artifacts)
         return report, dict(artifacts.patches)
 
+    @property
+    def api_token(self) -> str:
+        return self.environment.api_token
+
     def capabilities(self) -> dict:
         """What this deployment can actually do, so the UI can say so up front."""
         return {
+            # Whether writes need APM_API_TOKEN; never the token itself.
+            "api_token_required": bool(self.environment.api_token),
             "read_private_repositories": self.private_access(),
             "create_pull_requests": self.github.can_create_pull_requests,
             # Checks are readable only through the API; a pull request opened

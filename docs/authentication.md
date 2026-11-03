@@ -15,7 +15,7 @@ A pull request therefore involves three identities:
 | Identity | Comes from | Does |
 |---|---|---|
 | Commit author/committer | `APM_COMMITTER_NAME`, `APM_COMMITTER_EMAIL` | written into the `debian/upstream.md` commit |
-| Branch pusher | the GitHub account of the SSH key | pushes `upstream-metadata/<release>/<package>` |
+| Branch pusher | the GitHub account of the SSH key | pushes `debian-upstream-tracking` (earlier `upstream-metadata/<release>/<package>`) |
 | PR author | the owner of the token - or, with `--push-only`, whoever opens the link | opens the pull request |
 
 ## SSH: git access

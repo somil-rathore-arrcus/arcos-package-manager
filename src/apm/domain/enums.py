@@ -286,4 +286,7 @@ class ErrorCode(str, Enum):
     # moved past; applying it would apply something nobody reviewed.
     STALE_SELECTION = "STALE_SELECTION"
     BASE_MOVED = "BASE_MOVED"
+    # This deployment's own API token (APM_API_TOKEN), not GitHub's, is needed
+    # for a request that pushes, opens a pull request or records an approval.
+    API_TOKEN_REQUIRED = "API_TOKEN_REQUIRED"
     INTERNAL = "INTERNAL"

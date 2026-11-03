@@ -181,6 +181,17 @@ class PublishLedger:
         return "\n".join(lines) + "\n"
 
 
+def all_records(out_dir: Path) -> List[PublishResult]:
+    """Every release's recorded results (never a dry run's), so a branch one
+    release or package pushed is recognised as the tool's own from another."""
+    prefix = "upstream-md-pr-results-"
+    records: List[PublishResult] = []
+    for path in sorted(Path(out_dir).glob(f"{prefix}*.json")):
+        release = path.stem[len(prefix):]
+        records.extend(PublishLedger.for_release(out_dir, release).entries())
+    return records
+
+
 def summary_counts(results: Iterable[PublishResult]) -> Dict[PublishStatus, int]:
     counts: Dict[PublishStatus, int] = {}
     for result in results:

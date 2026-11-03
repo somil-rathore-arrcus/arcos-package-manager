@@ -384,3 +384,34 @@ def test_a_closed_pull_request_is_never_pushed_again_by_push_only(tmp_path):
     entry = json.loads((out / "upstream-md-pr-results-bookworm.json")
                        .read_text())["entries"][0]
     assert entry["status"] == "PR_CLOSED"
+
+
+def test_a_release_cannot_push_over_the_shared_branch_another_release_pushed(
+        tmp_path, capsys):
+    from apm.services.upstream_md_publisher import TRACKING_BRANCH
+
+    remote, github, container, out = _setup(tmp_path)
+    github.token = ""
+    container.publisher.branch_template = TRACKING_BRANCH
+    assert run(out_dir=out, packages_wanted=["mstpd"], apply=True,
+               push_only=True, confirm=["mstpd"], container=container) == 0
+    pushed = remote.ref(TRACKING_BRANCH)
+    assert pushed
+
+    # The same repository proposed for trixie: same plan, another release.
+    plan = json.loads((out / "upstream-md-plan-bookworm.json").read_text())
+    plan["release"] = "trixie"
+    (out / "upstream-md-plan-trixie.json").write_text(json.dumps(plan))
+    trixie = _resolution(remote=remote, debian_release="trixie")
+    container.mapping = FakeMapping({"mstpd": trixie})
+
+    assert run(release="trixie", out_dir=out, packages_wanted=["mstpd"],
+               apply=True, push_only=True, confirm=["mstpd"],
+               container=container) == 0, "refused, as a stranger's branch is"
+
+    ledger = json.loads((out / "upstream-md-pr-results-trixie.json").read_text())
+    [entry] = ledger["entries"]
+    assert entry["status"] == "BRANCH_EXISTS"
+    assert "mstpd (bookworm)" in entry["error"]
+    assert remote.ref(TRACKING_BRANCH) == pushed
+    assert len(container.publisher.workspaces.pushes) == 1

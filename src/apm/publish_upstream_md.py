@@ -63,7 +63,7 @@ def run(release: str = "bookworm", out_dir: Path = None, plan: Path = None,
         exclude: List[str] = None, show_diff: bool = False,
         push_only: bool = False, container=None) -> int:
     from .services.container import Container
-    from .services.publish_ledger import PublishLedger
+    from .services.publish_ledger import PublishLedger, all_records
     from .services.upstream_md_publisher import PublishError, load_targets
 
     out_dir = Path(out_dir or ROOT / "out")
@@ -106,6 +106,8 @@ def run(release: str = "bookworm", out_dir: Path = None, plan: Path = None,
         targets, history, retry_failed=retry_failed, recheck=recheck, limit=limit,
         push_only=push_only,
     )
+    queue, shared = publisher.refuse_shared_branches(queue)
+    settled = settled + shared
     waiting = [k for k in kept if k.status is PublishStatus.BRANCH_PUSHED]
 
     if apply and confirm:
@@ -150,6 +152,7 @@ def run(release: str = "bookworm", out_dir: Path = None, plan: Path = None,
             queue, apply=apply, ledger=ledger, confirm_count=confirm_count,
             stop_after_failures=stop_after_failures, draft=draft,
             title_prefix=title_prefix, progress=progress, push_only=push_only,
+            others=all_records(out_dir),
         )
     except PublishError as exc:
         print(f"\nstopped: {exc}", file=sys.stderr)

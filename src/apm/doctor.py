@@ -110,6 +110,14 @@ def run_doctor(repositories=(), release: str = "bookworm",
                 line.split("!")[0].replace("Hi ", "authenticated as ")
                 if line else "could not confirm (push access is checked at push time)")
 
+    print("== Dashboard API")
+    if env.api_token:
+        _report("PASS", "APM_API_TOKEN is set",
+                "pushes, pull requests and approvals need it; value not shown")
+    else:
+        _report("WARN", "APM_API_TOKEN is not set",
+                "anyone who can reach the dashboard can push with this server's key")
+
     print("== GitHub API")
     from .services.github_service import GitHubError, GitHubService
 

@@ -58,6 +58,15 @@ BRANCH_PREFIX = "upstream-metadata/"
 # Per release and package: trixie can follow without colliding, and two packages
 # built from one repository (ONL-standalone and ONL-xc) cannot share a branch.
 BRANCH_TEMPLATE = BRANCH_PREFIX + "{release}/{package}"
+# The name the ARCoS maintainers asked for: one branch per repository. It names
+# neither the release nor the package, so a repository holds one such proposal
+# at a time; the publisher refuses a second rather than replace the first.
+TRACKING_BRANCH = "debian-upstream-tracking"
+
+# Every name this workflow may push to, whatever settings.yaml says, so a typo
+# there cannot point a push at a release branch: anything under
+# upstream-metadata/, and debian-upstream-tracking itself or anything under it.
+_NAMESPACES = (BRANCH_PREFIX, TRACKING_BRANCH + "/")
 
 # Characters and sequences git refuses in a ref name, plus whitespace.
 _BAD_REF = re.compile(r"\.\.|[\s~^:?*\[\\]|@\{|//|/\.|\.lock(/|$)|^/|/$|\.$")
@@ -92,13 +101,33 @@ def branch_for(package: str, release: str,
     return template.format(package=package, release=release)
 
 
+def in_namespace(branch: str) -> bool:
+    """Whether `branch` is a name this workflow may create."""
+    return bool(branch) and (
+        branch == TRACKING_BRANCH
+        or any(branch.startswith(ns) and len(branch) > len(ns)
+               for ns in _NAMESPACES)
+    )
+
+
+def names_proposal(branch: str, package: str, release: str) -> bool:
+    """Whether the branch name alone identifies this release's package.
+
+    upstream-metadata/bookworm/mstpd does; debian-upstream-tracking is shared by
+    every release and package of the repository, so a pull request found by
+    that name proves nothing about which proposal it was.
+    """
+    parts = branch.split("/")
+    return package in parts and release in parts
+
+
 def validate_branch(branch: str, base: str) -> None:
     """Refuse any branch this workflow must not write to. Raises PublishError."""
-    if not branch or not branch.startswith(BRANCH_PREFIX):
+    if not in_namespace(branch):
         raise PublishError(
             ErrorCode.INVALID_REQUEST,
-            f"Branch {branch!r} is not under {BRANCH_PREFIX}; this workflow only "
-            f"creates branches there.",
+            f"Branch {branch!r} is not {TRACKING_BRANCH} or under "
+            f"{BRANCH_PREFIX}; this workflow only creates branches there.",
         )
     if branch == base:
         raise PublishError(
@@ -110,6 +139,21 @@ def validate_branch(branch: str, base: str) -> None:
         raise PublishError(
             ErrorCode.INVALID_REQUEST, f"{branch!r} is not a valid branch name."
         )
+
+
+def validate_template(template: str) -> str:
+    """The branch_template from settings.yaml, checked once at start-up so a bad
+    one stops the service instead of the first push."""
+    try:
+        sample = branch_for("package", "release", template)
+    except (KeyError, IndexError, ValueError) as exc:
+        raise PublishError(
+            ErrorCode.INVALID_REQUEST,
+            f"branch_template {template!r} is not valid ({exc!r}); the only "
+            f"placeholders are {{release}} and {{package}}.",
+        ) from exc
+    validate_branch(sample, base="")
+    return template
 
 
 def commit_title(package: str, outcome: Optional[UpstreamMdOutcome],
@@ -142,6 +186,19 @@ def lint_content(content: str) -> Optional[str]:
 
 def sha256_text(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _owner(others: Sequence[PublishResult], target: "PublishTarget",
+           branch: str, sha: str) -> Optional[PublishResult]:
+    """The other package or release whose record says it pushed `sha` to
+    `branch` on this repository, or None."""
+    for other in others:
+        if (other.package, other.release) == (target.package, target.release):
+            continue
+        if other.branch == branch and other.commit == sha and \
+                other.repository.lower() == target.slug.lower():
+            return other
+    return None
 
 
 # -- what to publish ----------------------------------------------------------
@@ -344,15 +401,61 @@ class UpstreamMdPublisher:
                                     t.package),
         )
 
+    def branch_of(self, target: PublishTarget,
+                  prior: Optional[PublishResult] = None) -> str:
+        """The branch this package's proposal lives on.
+
+        A branch this tool already pushed, or opened a pull request from, keeps
+        its name whatever the template says now: changing the template must not
+        leave a second branch carrying the same file beside the first.
+        """
+        if prior is not None and prior.branch and (
+                prior.pushed or prior.pull_request is not None):
+            return prior.branch
+        return branch_for(target.package, target.release, self.branch_template)
+
+    def refuse_shared_branches(
+            self, queue: Sequence[Tuple[PublishTarget, Optional[PublishResult]]],
+    ) -> Tuple[List[Tuple[PublishTarget, Optional[PublishResult]]],
+               List[PublishResult]]:
+        """Split off every package whose branch an earlier one in `queue` uses.
+
+        Under a name shared by the whole repository (debian-upstream-tracking),
+        two packages built from one repository would otherwise both be proposed
+        on it, and the second would find the first's branch. The first in plan
+        order keeps it; the rest are refused here, before any confirmation
+        count, so a dry run reports what an apply would do.
+        """
+        kept, refused = [], []
+        claimed: Dict[Tuple[str, str], PublishTarget] = {}
+        for target, prior in queue:
+            branch = self.branch_of(target, prior)
+            first = claimed.setdefault((target.slug.lower(), branch), target)
+            if first is target:
+                kept.append((target, prior))
+                continue
+            refused.append(PublishResult(
+                package=target.package, release=target.release,
+                status=PublishStatus.BRANCH_EXISTS, repository=target.slug,
+                base_branch=target.base_branch, branch=branch,
+                pinned_commit=target.pinned_commit,
+                error=(f"{branch} on {target.slug} is this run's branch for "
+                       f"{first.package} ({first.release}); a branch name the "
+                       f"whole repository shares carries one proposal at a time"),
+            ))
+        return kept, refused
+
     # -- one package -------------------------------------------------------
 
     def publish(self, target: PublishTarget, *, apply: bool, draft: bool = False,
                 title_prefix: str = "", branch: Optional[str] = None,
                 prior: Optional[PublishResult] = None,
-                push_only: bool = False) -> PublishResult:
-        branch = branch or branch_for(
-            target.package, target.release, self.branch_template
-        )
+                push_only: bool = False,
+                others: Sequence[PublishResult] = ()) -> PublishResult:
+        """`others` are the ledger records of every other package and release,
+        so a branch one of them pushed is named as theirs, not as a stranger's.
+        """
+        branch = branch or self.branch_of(target, prior)
         result = PublishResult(
             package=target.package, release=target.release,
             status=PublishStatus.ERROR, repository=target.slug,
@@ -409,7 +512,7 @@ class UpstreamMdPublisher:
             workspace.ensure()
             done = self._prepare_and_push(
                 workspace, target, result, apply=apply, title_prefix=title_prefix,
-                prior=prior, push_only=push_only,
+                prior=prior, push_only=push_only, others=others,
             )
         finally:
             workspace.destroy()
@@ -426,7 +529,8 @@ class UpstreamMdPublisher:
                           result: PublishResult, *, apply: bool,
                           title_prefix: str,
                           prior: Optional[PublishResult],
-                          push_only: bool = False) -> bool:
+                          push_only: bool = False,
+                          others: Sequence[PublishResult] = ()) -> bool:
         """Steps up to and including the push. True when a PR should follow."""
         url, base, branch = target.repository_url, target.base_branch, result.branch
 
@@ -473,14 +577,24 @@ class UpstreamMdPublisher:
                     )
                     return False
                 return not self._settled_by_earlier_pr(
-                    target, result, push_only=push_only
+                    target, result, push_only=push_only, prior=prior
                 )
             result.status = PublishStatus.BRANCH_EXISTS
             result.commit = existing_branch
-            result.error = (
-                f"{branch} already exists at {existing_branch[:12]} and this "
-                f"tool has no record of creating it"
-            )
+            owner = _owner(others, target, branch, existing_branch)
+            if owner is not None:
+                result.error = (
+                    f"{branch} on {target.slug} holds this tool's proposal for "
+                    f"{owner.package} ({owner.release}) at "
+                    f"{existing_branch[:12]}; a branch name the whole repository "
+                    f"shares carries one proposal at a time, so this one waits "
+                    f"until that pull request is merged or the branch deleted"
+                )
+            else:
+                result.error = (
+                    f"{branch} already exists at {existing_branch[:12]} and this "
+                    f"tool has no record of creating it"
+                )
             return False
 
         head = workspace.fetch_side("arcos", url, base, depth=1)
@@ -510,7 +624,8 @@ class UpstreamMdPublisher:
             )
             return False
 
-        if self._settled_by_earlier_pr(target, result, push_only=push_only):
+        if self._settled_by_earlier_pr(target, result, push_only=push_only,
+                                       prior=prior):
             return False
 
         result.title = commit_title(target.package, outcome, title_prefix)
@@ -612,7 +727,8 @@ class UpstreamMdPublisher:
 
     def _settled_by_earlier_pr(self, target: PublishTarget,
                                result: PublishResult,
-                               push_only: bool = False) -> bool:
+                               push_only: bool = False,
+                               prior: Optional[PublishResult] = None) -> bool:
         """True when a pull request for this branch already decided it.
 
         A merged one is done. A closed one was turned down by a reviewer, and
@@ -620,6 +736,11 @@ class UpstreamMdPublisher:
         open one settles only a push-only run, which would otherwise hand out a
         link to open it a second time; an apply goes on to find it as
         PR_EXISTS. Without a token nothing can be looked up, and this is False.
+
+        GitHub finds pull requests by head-branch name. Where the name is shared
+        by the whole repository, one found may be another release's or another
+        package's, so it counts only if its head is the commit this package's
+        record holds.
         """
         if not self.github.can_create_pull_requests:
             return False
@@ -627,6 +748,10 @@ class UpstreamMdPublisher:
             target.slug, result.branch, target.base_branch, state="all"
         )
         if earlier is None:
+            return False
+        if not names_proposal(result.branch, target.package, target.release) \
+                and not (prior is not None and prior.commit
+                         and earlier.head_sha == prior.commit):
             return False
         if earlier.state == "open":
             if not push_only:
@@ -731,6 +856,7 @@ class UpstreamMdPublisher:
                      title_prefix: str = "",
                      progress: Optional[Callable[[int, int, str], None]] = None,
                      push_only: bool = False,
+                     others: Sequence[PublishResult] = (),
                      ) -> List[PublishResult]:
         """Process `queue` in order; one package's failure never stops the rest,
         but `stop_after_failures` consecutive ones do - that is a systemic
@@ -755,7 +881,7 @@ class UpstreamMdPublisher:
             try:
                 result = self.publish(
                     target, apply=apply, draft=draft, title_prefix=title_prefix,
-                    prior=prior, push_only=push_only,
+                    prior=prior, push_only=push_only, others=others,
                 )
             except PublishError:
                 raise
@@ -765,8 +891,7 @@ class UpstreamMdPublisher:
                     package=target.package, release=target.release,
                     status=PublishStatus.ERROR, repository=target.slug,
                     base_branch=target.base_branch,
-                    branch=branch_for(target.package, target.release,
-                                      self.branch_template),
+                    branch=self.branch_of(target, prior),
                     pinned_commit=target.pinned_commit,
                     error=f"{type(exc).__name__}: {exc} "
                           f"{getattr(exc, 'stderr', '')}".strip()[:400],

@@ -5,16 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from ...config import ROOT
 from ...domain.enums import ErrorCode, ResolutionStatus
 from ...domain.models import PublishResult, UpstreamMdDocument
-from ...services.publish_ledger import PublishLedger
+from ...services.publish_ledger import PublishLedger, all_records
 from ...services.upstream_md_publisher import (
     PublishError, target_from_resolution,
 )
-from ..deps import container
+from ..deps import container, require_write_access
 from ..schemas import UpstreamMdPrRequest, UpstreamMdRequest
 
 router = APIRouter(tags=["upstream.md"])
@@ -34,8 +34,10 @@ def _existing(app, resolution):
 
 
 @router.post("/upstream-md/generate", response_model=UpstreamMdDocument)
-def generate(request: UpstreamMdRequest, app=Depends(container)):
+def generate(request: UpstreamMdRequest, http: Request, app=Depends(container)):
     """Render the file and report what writing it would do. Writes nothing remote."""
+    if request.write_local:
+        require_write_access(http, app)
     resolution = app.upstream.resolve(
         request.package, request.release, request.arcos_branch
     )
@@ -55,12 +57,15 @@ def generate(request: UpstreamMdRequest, app=Depends(container)):
 
 
 @router.post("/upstream-md/pr", response_model=PublishResult)
-def open_pull_request(request: UpstreamMdPrRequest, app=Depends(container)):
+def open_pull_request(request: UpstreamMdPrRequest, http: Request,
+                      app=Depends(container)):
     """Commit the file on a new branch and open a PR, through the same publisher
     the CLI uses. Requires explicit confirmation unless it is a dry run.
 
     With push_only the branch is pushed and no PR is opened; the result carries
     the link a person opens it from, and no token is needed."""
+    if not request.dry_run:
+        require_write_access(http, app)
     if not request.confirm and not request.dry_run:
         raise PublishError(
             ErrorCode.INVALID_REQUEST,
@@ -90,7 +95,7 @@ def open_pull_request(request: UpstreamMdPrRequest, app=Depends(container)):
     result = app.publisher.publish(
         target, apply=not request.dry_run, draft=request.draft,
         branch=request.branch_name or None, prior=ledger.get(request.package),
-        push_only=request.push_only,
+        push_only=request.push_only, others=all_records(OUT_DIR),
     )
     if not request.dry_run:
         ledger.record(result)

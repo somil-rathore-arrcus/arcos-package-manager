@@ -55,6 +55,7 @@ values, shown in the last column.
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `APM_API_TOKEN` | empty | This deployment's own token. When set, a push, a pull request, a cherry-pick that pushes, a content-base approval and `write_local` need `Authorization: Bearer <token>`; the dashboard asks for it once per tab. Empty = anyone who can reach the port can push. **Secret.** |
 | `APM_GITHUB_TOKEN` | empty | Token for the GitHub REST API. Empty = read-only: the tool opens no pull request (`publish-upstream-md --push-only` still pushes branches with the SSH key). **Secret.** See [authentication.md](authentication.md) |
 | `APM_GITHUB_API_URL` | `https://api.github.com` | API base URL |
 
@@ -115,7 +116,7 @@ Only for a deployment whose own key cannot reach the repositories.
 | `APM_PACKAGES_FILE` | `out/packages.yaml` (set by `scripts/env.sh`) | Runtime catalogue |
 | `APM_APPROVALS_FILE` | `out/approvals.yaml` | Content-base approvals |
 | `APM_FRONTEND_DIST` | `frontend/dist` | Built dashboard to serve |
-| `APM_CORS_ORIGINS` | unset | Comma-separated origins allowed by CORS (only for a dashboard served from another origin) |
+| `APM_CORS_ORIGINS` | unset | Comma-separated origins allowed by CORS (only for a dashboard served from another origin). `*` is refused at start-up; credentials are not allowed |
 | `VITE_API_BASE_URL` | `/api` | API base the dashboard calls |
 | `VITE_PORT`, `VITE_API_TARGET` | `5173`, `http://127.0.0.1:8000` | Vite dev server and the API it proxies to |
 
@@ -138,7 +139,7 @@ Only for a deployment whose own key cannot reach the repositories.
 | `security.osv` | OSV.dev lookups: on/off, URL, timeout, cache TTL |
 | `private_repository_patterns` | Default private patterns for the `auto` backend |
 | `patches` | `validation_commands` run in the patched tree before a patch branch may be pushed (empty: nothing is built or tested, and the tool says so), `validation_timeout_seconds` (900) - see [patch-workflow.md](patch-workflow.md#validation-build-or-test-the-patched-tree) |
-| `upstream_md_publish` | Branch template `upstream-metadata/{release}/{package}`, `exclude` (packages never proposed, with the reason - [below](#upstream_md_publishexclude)), `defer` (processed last: `openssl`, `linux`) |
+| `upstream_md_publish` | Branch template `debian-upstream-tracking` ([upstream-md-publishing.md](upstream-md-publishing.md#branch-name)), `exclude` (packages never proposed, with the reason - [below](#upstream_md_publishexclude)), `defer` (processed last: `openssl`, `linux`) |
 
 ### `upstream_md_publish.exclude`
 

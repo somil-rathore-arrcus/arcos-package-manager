@@ -4,7 +4,11 @@ Base URL: `http://<server-ip>:8080/api`. Interactive documentation, generated
 from the code, is at `http://<server-ip>:8080/docs`; the schema at
 `/openapi.json`.
 
-The API has **no authentication of its own** - see
+Requests that write - a push (not a dry run), a pull request, a cherry-pick
+with `push: true`, a content-base approval, `write_local` - need
+`Authorization: Bearer <APM_API_TOKEN>` when the server sets `APM_API_TOKEN`
+(401 `API_TOKEN_REQUIRED` otherwise). Without it the API has no
+authentication of its own - see
 [deployment.md → Access control](deployment.md#access-control). Endpoints that
 push need an explicit flag in the request and push with the server's SSH key;
 opening a pull request also needs `APM_GITHUB_TOKEN` on the server.
@@ -20,7 +24,7 @@ Every handled error is JSON with a code the dashboard renders differently:
 | Code | HTTP | | Code | HTTP |
 |---|---|---|---|---|
 | `INVALID_REQUEST` | 400 | | `UPSTREAM_NOT_RESOLVED` | 409 |
-| `AUTH_REQUIRED` | 401 | | `NO_COMMON_ANCESTOR` | 422 |
+| `AUTH_REQUIRED`, `API_TOKEN_REQUIRED` | 401 | | `NO_COMMON_ANCESTOR` | 422 |
 | `NOT_FOUND`, `BRANCH_NOT_FOUND`, `INVALID_REF` | 404 | | `INTERNAL` | 500 |
 | `CONFLICT`, `STALE_SELECTION`, `BASE_MOVED` | 409 | | `REPOSITORY_UNAVAILABLE`, `GIT_ERROR`, `PROBE_FAILED`, `NETWORK_ERROR` | 502 |
 | | | | `TIMEOUT` | 504 |
@@ -188,7 +192,7 @@ Returns the PR, or the one already open for that branch.
 
 **`GET /api/publish-status?package=mstpd&branch=upstream-metadata/bookworm/mstpd&base=aminor`**
 
-For a branch this tool created (`upstream/...` or `upstream-metadata/...`; 400
+For a branch this tool created (`upstream/...`, `upstream-metadata/...` or `debian-upstream-tracking`; 400
 otherwise): `branch_exists`, `head_sha`, `pull_requests` (number and URL of
 each PR whose head is that commit, from `refs/pull/<n>/head` over SSH - no
 token needed), `pull_request` (state, with a token), `api_access`, and `ci`:
@@ -228,7 +232,7 @@ token, no permission, GitHub unreachable - is never a pass.
   pushes nothing and returns that record unchanged.
 - Neither `dry_run` nor `confirm` - refused (400). A package that is not
   `VERIFIED` - refused (400).
-- `branch_name` must be under `upstream-metadata/` and differ from the target.
+- `branch_name` must be `debian-upstream-tracking`, or under `upstream-metadata/` or `debian-upstream-tracking/`, and differ from the target.
 
 Returns one publish result (status, branch, commit, base SHA, PR,
 `pr_create_url`, error). A real run - push-only included - is recorded in

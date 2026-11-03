@@ -161,9 +161,14 @@ patches:
   validation_timeout_seconds: 900
 
 upstream_md_publish:
-  # Every branch this workflow creates lives under upstream-metadata/; the
-  # publisher refuses any other name, and any name equal to the target branch.
-  branch_template: "upstream-metadata/{release}/{package}"
+  # The branch each proposal is pushed to. Lakshya asked (2026-10-29) for one
+  # branch named debian-upstream-tracking in each package repository. It names
+  # neither release nor package, so a repository carries one such proposal at a
+  # time and a second (trixie beside bookworm) is refused, never overwritten.
+  # A branch already pushed under the earlier upstream-metadata/{release}/
+  # {package} name keeps that name. The publisher refuses anything outside
+  # these two conventions, and any name equal to the target branch.
+  branch_template: "debian-upstream-tracking"
   # Packages never proposed, with the reason recorded in the results ledger.
   exclude:
     ONL-standalone: >-

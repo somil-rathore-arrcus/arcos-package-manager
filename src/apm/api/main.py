@@ -38,10 +38,19 @@ def create_app() -> FastAPI:
         o.strip() for o in os.environ.get("APM_CORS_ORIGINS", "").split(",")
         if o.strip()
     ]
+    if "*" in origins:
+        # Any website a user visits could then drive this API, pushes included.
+        raise RuntimeError(
+            "APM_CORS_ORIGINS must list the dashboard's origins (for example "
+            "http://localhost:5173); '*' is refused."
+        )
     if origins:
         app.add_middleware(
-            CORSMiddleware, allow_origins=origins, allow_credentials=True,
-            allow_methods=["*"], allow_headers=["*"],
+            CORSMiddleware, allow_origins=origins,
+            # No cookies are used: the dashboard sends the API token as a header.
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type"],
         )
 
     for module in (health, catalog, upstream, comparison, patches, upstream_md,

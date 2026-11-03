@@ -210,7 +210,7 @@ class FakePublisher:
             list(slugs))
 
     def publish(self, target, *, apply, draft=False, title_prefix="",
-                branch=None, prior=None, push_only=False):
+                branch=None, prior=None, push_only=False, others=()):
         validate_branch(branch or "upstream-metadata/bookworm/x", target.base_branch)
         self.calls.append({"package": target.package, "apply": apply,
                            "branch": branch, "content": target.content,
@@ -767,3 +767,90 @@ def test_an_unpushed_patch_branch_has_no_link(app_container):
     client, _ = app_container
     body = _cherry_pick(client, push=False)
     assert body["pr_body"] and body["pr_create_url"] is None
+
+
+# -- the deployment's own API token (APM_API_TOKEN) -----------------------------
+
+PICK = {
+    "package": "pyrad", "release": "bookworm", "arcos_branch": "aminor",
+    "upstream_repository": "https://github.com/x/y.git",
+    "upstream_ref": "master", "shas": ["a" * 40], "expected_base_sha": "b" * 40,
+}
+SECRET = "Zq9-api-secret"
+PR = {"package": "pyrad", "release": "bookworm", "arcos_branch": "aminor",
+      "head_branch": "upstream/pyrad/x", "applied": ["a" * 40]}
+
+
+@pytest.mark.parametrize("headers", [
+    {}, {"Authorization": "Bearer wrong"}, {"Authorization": SECRET},
+    {"Authorization": f"Basic {SECRET}"},
+])
+def test_writes_need_the_api_token_when_one_is_set(app_container, headers):
+    client, fake = app_container
+    fake.api_token = SECRET
+
+    for path, body in [
+        ("/api/pull-requests", PR),
+        ("/api/patches/cherry-pick", {**PICK, "push": True}),
+        ("/api/upstream-md/pr", {"package": "pyrad", "release": "bookworm",
+                                 "confirm": True, "push_only": True}),
+        ("/api/upstream/content-base/approve",
+         {"package": "pyrad", "release": "bookworm", "tag": "v1",
+          "verified_by": "Somil", "confirm": True}),
+        ("/api/upstream-md/generate", {"package": "pyrad", "release": "bookworm",
+                                       "write_local": True}),
+    ]:
+        response = client.post(path, json=body, headers=headers)
+        assert response.status_code == 401, path
+        assert response.json()["code"] == "API_TOKEN_REQUIRED", path
+        assert SECRET not in response.text
+    assert fake.github.created == [] and fake.publisher.calls == []
+
+
+def test_the_right_api_token_lets_a_write_through(app_container):
+    client, fake = app_container
+    fake.api_token = SECRET
+
+    response = client.post("/api/pull-requests", json=PR,
+                           headers={"Authorization": f"Bearer {SECRET}"})
+
+    assert response.status_code == 200, response.text
+    assert len(fake.github.created) == 1
+
+
+def test_reads_and_dry_runs_never_need_the_api_token(app_container):
+    client, fake = app_container
+    fake.api_token = SECRET
+
+    assert client.get("/api/upstream/pyrad", params={"release": "bookworm"}).status_code == 200
+    assert client.post("/api/patches/cherry-pick", json=PICK).json()["pushed"] is False
+    dry = client.post("/api/upstream-md/pr", json={
+        "package": "pyrad", "release": "bookworm", "dry_run": True})
+    assert dry.status_code == 200, dry.text
+
+
+def test_without_an_api_token_writes_behave_as_before(app_container):
+    client, fake = app_container
+    assert client.post("/api/pull-requests", json=PR).status_code == 200
+
+
+def test_cors_is_refused_for_every_origin(monkeypatch):
+    monkeypatch.setenv("APM_CORS_ORIGINS", "http://a.example, *")
+    with pytest.raises(RuntimeError, match="'\\*' is refused"):
+        create_app()
+
+
+def test_cors_allows_only_what_the_dashboard_sends(monkeypatch):
+    monkeypatch.setenv("APM_CORS_ORIGINS", "http://dash.example")
+    client = TestClient(create_app())
+
+    allowed = client.options("/api/health", headers={
+        "Origin": "http://dash.example", "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type"})
+    other = client.options("/api/health", headers={
+        "Origin": "http://evil.example", "Access-Control-Request-Method": "POST"})
+
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == "http://dash.example"
+    assert "access-control-allow-credentials" not in allowed.headers
+    assert other.status_code == 400

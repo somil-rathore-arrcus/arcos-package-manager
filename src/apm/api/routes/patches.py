@@ -6,7 +6,7 @@ pushes when asked, and a pull request is a separate call again.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from ...domain.models import (
     CherryPickPreview, CherryPickResult, PatchSelection, PullRequest, Repository,
@@ -18,7 +18,7 @@ from ...services.github_service import (
 )
 from ...services.patch_service import PatchError
 from ...domain.enums import ErrorCode, PreviewOutcome, ResolutionStatus
-from ..deps import container
+from ..deps import container, require_write_access
 from ..schemas import CherryPickRequest, PatchRequest, PullRequestRequest
 
 router = APIRouter(tags=["patches"])
@@ -50,13 +50,16 @@ def preview(request: PatchRequest, app=Depends(container)):
 
 
 @router.post("/patches/cherry-pick", response_model=CherryPickResult)
-def cherry_pick(request: CherryPickRequest, app=Depends(container)):
+def cherry_pick(request: CherryPickRequest, http: Request,
+                app=Depends(container)):
     """Apply the selection to a NEW branch. The target branch is never written to.
 
     Only after a preview: the request carries the preview's base_sha, and the
     service refuses if the target branch has moved since, or if any selected
     commit is no longer in the missing set.
     """
+    if request.push:
+        require_write_access(http, app)
     if not request.expected_base_sha:
         raise PatchError(
             ErrorCode.INVALID_REQUEST,
@@ -109,7 +112,9 @@ def _describe_pull_request(app, request: CherryPickRequest,
 
 
 @router.post("/pull-requests", response_model=PullRequest)
-def create_pull_request(request: PullRequestRequest, app=Depends(container)):
+def create_pull_request(request: PullRequestRequest, http: Request,
+                        app=Depends(container)):
+    require_write_access(http, app)
     resolution = app.upstream.resolve(
         request.package, request.release, request.arcos_branch
     )

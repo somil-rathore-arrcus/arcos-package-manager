@@ -35,9 +35,10 @@ from apm.gitio.workspace import GitWorkspace
 from apm.services.github_service import GitHubError, build_upstream_md_pr_body
 from apm.services.publish_ledger import PublishLedger
 from apm.services.upstream_md_publisher import (
-    BRANCH_TEMPLATE, PublishError, PublishTarget, UpstreamMdPublisher,
-    branch_for, commit_title, lint_content, load_targets, sha256_text,
-    target_from_resolution, validate_branch,
+    BRANCH_TEMPLATE, TRACKING_BRANCH, PublishError, PublishTarget,
+    UpstreamMdPublisher, branch_for, commit_title, lint_content, load_targets,
+    names_proposal, sha256_text, target_from_resolution, validate_branch,
+    validate_template,
 )
 from apm.services.upstream_md_service import MARKER, UpstreamMdService
 
@@ -1370,3 +1371,178 @@ def test_push_only_selection_keeps_what_it_can_do_nothing_more_for(tmp_path):
                                                    "pushed"]
     queue, _ = publisher.select(targets, ledger, push_only=True, recheck=True)
     assert len(queue) == len(names)
+
+
+# -- debian-upstream-tracking: one branch name for the whole repository --------
+
+def _tracking_publisher(tmp_path, github=None):
+    return UpstreamMdPublisher(
+        FakeWorkspaces(tmp_path / "ws-tracking"), github or FakeGitHub(),
+        author_name="Somil Rathore", author_email="somil.rathore@arrcus.com",
+        branch_template=TRACKING_BRANCH,
+    )
+
+
+def _target(remote, package="mstpd", **overrides):
+    resolution = _resolution(package, remote=remote, **overrides)
+    return target_from_resolution(resolution,
+                                  UpstreamMdService().render(resolution))
+
+
+@pytest.mark.parametrize("name", [
+    TRACKING_BRANCH, "debian-upstream-tracking/bookworm", BRANCH,
+])
+def test_both_conventions_name_branches_the_workflow_may_create(name):
+    validate_branch(name, "aminor")
+
+
+@pytest.mark.parametrize("name", [
+    "debian-upstream-tracking-x", "debian-upstream-trackingx",
+    "debian-upstream-tracking/", "debian-upstream-tracking/a..b",
+    "x/debian-upstream-tracking", "upstream-metadata", "upstream-metadata/",
+])
+def test_near_misses_of_either_convention_are_refused(name):
+    with pytest.raises(PublishError):
+        validate_branch(name, "aminor")
+
+
+@pytest.mark.parametrize("template", [
+    BRANCH_TEMPLATE, TRACKING_BRANCH, "debian-upstream-tracking/{release}",
+])
+def test_templates_in_either_convention_are_accepted(template):
+    assert validate_template(template) == template
+
+
+@pytest.mark.parametrize("template", [
+    "aminor", "{release}", "releases/{release}/{package}",
+    "upstream-metadata/{pkg}", "debian-upstream-tracking/{0}",
+])
+def test_a_template_outside_the_conventions_is_refused(template):
+    with pytest.raises(PublishError):
+        validate_template(template)
+
+
+def test_only_a_name_with_the_release_and_package_identifies_a_proposal():
+    assert names_proposal(BRANCH, "mstpd", "bookworm")
+    assert not names_proposal(TRACKING_BRANCH, "mstpd", "bookworm")
+    assert not names_proposal("debian-upstream-tracking/bookworm", "mstpd",
+                              "bookworm")
+    assert not names_proposal("upstream-metadata/trixie/mstpd", "mstpd",
+                              "bookworm")
+
+
+def test_the_tracking_name_pushes_one_branch_and_leaves_the_target(tmp_path):
+    remote = Remote(tmp_path / "remote")
+    github = FakeGitHub(token="")
+    publisher = _tracking_publisher(tmp_path, github)
+    aminor = remote.ref("aminor")
+
+    result = publisher.publish(_target(remote), apply=True, push_only=True)
+
+    assert result.status is PublishStatus.BRANCH_PUSHED, result.error
+    assert result.branch == TRACKING_BRANCH
+    assert remote.branches() == ["aminor", TRACKING_BRANCH]
+    assert remote.ref(TRACKING_BRANCH) == result.commit
+    assert remote.ref("aminor") == aminor and github.created == []
+    assert f"aminor...{TRACKING_BRANCH}" in result.pr_create_url
+
+
+def test_a_branch_pushed_under_the_old_name_keeps_it_after_a_switch(env, tmp_path):
+    remote, github, publisher, target = env
+    github.token = ""
+    old = publisher.publish(target, apply=True, push_only=True)
+    assert old.branch == BRANCH
+
+    switched = _tracking_publisher(tmp_path, github)
+    for apply in (False, True):
+        again = switched.publish(target, apply=apply, push_only=True, prior=old)
+        assert (again.branch, again.commit) == (BRANCH, old.commit), again.error
+    assert switched.workspaces.pushes == []
+
+    github.token = "tok"
+    opened = switched.publish(target, apply=True, prior=old)
+
+    assert opened.status is PublishStatus.PR_OPENED, opened.error
+    assert [pr["head"] for pr in github.created] == [BRANCH]
+    assert remote.branches() == ["aminor", BRANCH]
+    assert switched.workspaces.pushes == []
+
+
+def test_a_package_never_pushed_takes_the_new_name(env, tmp_path):
+    remote, github, _publisher, target = env
+    failed = PublishResult(package="mstpd", release="bookworm", branch=BRANCH,
+                           status=PublishStatus.PUSH_FAILED)
+
+    assert _tracking_publisher(tmp_path, github).branch_of(target, failed) == \
+        TRACKING_BRANCH
+
+
+def test_a_second_release_never_takes_over_the_shared_branch(tmp_path):
+    remote = Remote(tmp_path / "remote")
+    publisher = _tracking_publisher(tmp_path, FakeGitHub(token=""))
+    bookworm = publisher.publish(_target(remote), apply=True, push_only=True)
+    trixie = _target(remote, debian_release="trixie")
+
+    for apply in (False, True):
+        result = publisher.publish(trixie, apply=apply, push_only=True,
+                                   others=[bookworm])
+        assert result.status is PublishStatus.BRANCH_EXISTS
+        assert "mstpd (bookworm)" in result.error
+    stranger = publisher.publish(trixie, apply=True, push_only=True)
+    assert "no record of creating it" in stranger.error
+
+    assert remote.ref(TRACKING_BRANCH) == bookworm.commit
+    assert len(publisher.workspaces.pushes) == 1
+
+
+def test_two_packages_of_one_repository_never_share_a_branch_in_a_run(tmp_path):
+    remote = Remote(tmp_path / "remote")
+    targets = [_target(remote, package,
+                       github_repository="Arrcus/onl-testbed")
+               for package in ("ONL-standalone", "ONL-xc")]
+    publisher = _tracking_publisher(tmp_path, FakeGitHub(token=""))
+
+    queue, refused = publisher.refuse_shared_branches(
+        [(t, None) for t in targets])
+
+    assert [t.package for t, _ in queue] == ["ONL-standalone"]
+    [second] = refused
+    assert (second.package, second.status) == ("ONL-xc",
+                                               PublishStatus.BRANCH_EXISTS)
+    assert "ONL-standalone (bookworm)" in second.error
+
+    # Per release and package, nothing is shared.
+    queue, refused = _publisher_for(tmp_path, remote).refuse_shared_branches(
+        [(t, None) for t in targets])
+    assert len(queue) == 2 and refused == []
+
+
+def test_another_proposals_pr_under_the_shared_name_decides_nothing(tmp_path):
+    remote = Remote(tmp_path / "remote")
+    # Another release's merged pull request; its branch was deleted.
+    github = FakeGitHub(earlier=PullRequest(
+        number=3, state="merged", head=TRACKING_BRANCH, head_sha="f" * 40,
+        url="https://github.com/Arrcus/mstpd/pull/3"))
+    publisher = _tracking_publisher(tmp_path, github)
+
+    result = publisher.publish(_target(remote), apply=True)
+
+    assert result.status is PublishStatus.PR_OPENED, result.error
+    assert remote.ref(TRACKING_BRANCH) == result.commit
+
+
+def test_this_packages_pr_under_the_shared_name_still_counts(tmp_path):
+    remote = Remote(tmp_path / "remote")
+    github = FakeGitHub(token="")
+    publisher = _tracking_publisher(tmp_path, github)
+    target = _target(remote)
+    pushed = publisher.publish(target, apply=True, push_only=True)
+    github.token = "tok"
+    github.earlier = PullRequest(
+        number=4, state="closed", head=TRACKING_BRANCH, head_sha=pushed.commit,
+        url="https://github.com/Arrcus/mstpd/pull/4")
+
+    again = publisher.publish(target, apply=True, prior=pushed)
+
+    assert again.status is PublishStatus.PR_CLOSED
+    assert github.created == [] and len(publisher.workspaces.pushes) == 1

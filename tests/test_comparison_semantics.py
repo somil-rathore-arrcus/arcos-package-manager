@@ -25,7 +25,8 @@ from apm.gitio.workspaces import WorkspaceManager
 from apm.services.comparison_service import ComparisonError, ComparisonService
 from apm.services.comparison_store import ComparisonStore
 from apm.services.security_service import (
-    DebianSecurityProvider, OsvSecurityProvider, SecurityService,
+    DebianSecurityProvider, OsvSecurityProvider, SecurityContext,
+    SecurityService,
 )
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
@@ -312,6 +313,116 @@ def test_an_osv_fix_commit_marks_the_missing_commit_critical(world, tmp_path):
     assert commit.criticality.sources == ["osv"]
     assert client.calls[0] == {"commit": result.summary.merge_bases[0]}
     assert result.security[0].status == "missing"
+
+
+def test_a_fix_beyond_a_truncated_list_is_missing_not_off_the_ref(world, tmp_path):
+    fix = fx.commit(world["up"], "lib.c", _edit(BASE_FILE, "line 9\n", "line 9 ok\n"),
+                    "quiet fix")
+    fx.commit(world["up"], "other.c", "int other = 1;\n", "later work")
+    payload = {"vulns": [{"id": "OSV-2026-2", "affected": [{"ranges": [{
+        "type": "GIT", "repo": str(world["up"]),
+        "events": [{"introduced": "0"}, {"fixed": fix}]}]}]}]}
+    osv = OsvSecurityProvider(client=FakeOsv(payload), cache_dir=tmp_path / "osv")
+    # Only the most recent missing commit is listed; the fix is not among them.
+    result = _service(world["root"], security=SecurityService([osv]),
+                      max_commits=1).compare(_resolution(world))
+
+    assert result.summary.truncated
+    assert "quiet fix" not in _by_subject(result)
+    assert result.security[0].status == "missing"
+
+
+def _context(**overrides):
+    values = dict(package="demo", release="bookworm",
+                  upstream_repository="https://github.com/demo/demo.git",
+                  base_commits=["b" * 40])
+    values.update(overrides)
+    return SecurityContext(**values)
+
+
+def _osv_answer(vuln, context, **kwargs):
+    osv = OsvSecurityProvider(client=FakeOsv({"vulns": [vuln]}), **kwargs)
+    return osv.answer(context)
+
+
+def _fixes_of(vuln, context):
+    [finding] = _osv_answer(vuln, context).findings
+    return finding.fix_commits
+
+
+def test_osv_fix_references_must_name_this_upstream():
+    vuln = {"id": "OSV-1", "references": [
+        {"type": "FIX", "url": "https://github.com/demo/demo/commit/" + "a" * 40},
+        {"type": "FIX", "url": "https://github.com/other/project/commit/" + "c" * 40},
+        {"type": "WEB", "url": "https://github.com/demo/demo/commit/" + "d" * 40},
+    ]}
+    assert _fixes_of(vuln, _context()) == ["a" * 40]
+
+
+def test_another_repositorys_fix_counts_when_the_upstream_has_it():
+    vuln = {"id": "OSV-1", "affected": [{"ranges": [{
+        "type": "GIT", "repo": "https://git.kernel.org/torvalds/linux.git",
+        "events": [{"introduced": "0"}, {"fixed": "e" * 40}]}]}],
+        "references": [{"type": "FIX",
+                        "url": "https://github.com/mirror/demo/commit/" + "f" * 40}]}
+    has = {"e" * 40}
+    context = _context(upstream_contains=lambda sha: sha in has)
+    assert _fixes_of(vuln, context) == ["e" * 40]
+
+
+@pytest.mark.parametrize("url", [
+    "https://gitlab.com/demo/demo/-/commit/" + "a" * 40,
+    "https://git.example.org/demo/demo.git/commit/?id=" + "a" * 40,
+])
+def test_gitlab_and_cgit_fix_links_are_read(url):
+    context = _context(upstream_repository=url.split("/commit")[0].removesuffix("/-"))
+    vuln = {"id": "OSV-1", "references": [{"type": "FIX", "url": url}]}
+    assert _fixes_of(vuln, context) == ["a" * 40]
+
+
+class PagedOsv:
+    def __init__(self, pages):
+        self.pages, self.calls = pages, []
+
+    def post(self, url, json=None):
+        import httpx
+
+        self.calls.append(json)
+        page = self.pages[len(self.calls) - 1]
+        return httpx.Response(200, json=page, request=httpx.Request("POST", url))
+
+
+def test_every_osv_page_is_read():
+    client = PagedOsv([{"vulns": [{"id": "OSV-1"}], "next_page_token": "t1"},
+                       {"vulns": [{"id": "OSV-2"}]}])
+    answer = OsvSecurityProvider(client=client).answer(_context())
+
+    assert [f.identifier for f in answer.findings] == ["OSV-1", "OSV-2"]
+    assert client.calls[1] == {"commit": "b" * 40, "page_token": "t1"}
+    assert "not shown" not in answer.detail
+
+
+def test_a_partial_osv_answer_says_so():
+    endless = [{"vulns": [{"id": f"OSV-{i}"}], "next_page_token": f"t{i}"}
+               for i in range(5)]
+    answer = OsvSecurityProvider(client=PagedOsv(endless), max_pages=2,
+                                 max_vulns=1).answer(_context())
+
+    assert len(answer.findings) == 1
+    assert "showing 1 of 2 vulnerabilities" in answer.detail
+    assert "more than the 2 page(s) read" in answer.detail
+
+
+@pytest.mark.parametrize("upstream,status", [
+    (lambda sha: True, "missing"), (lambda sha: False, "not_in_range"),
+    (lambda sha: None, "unknown"), (None, "not_in_range"),
+])
+def test_a_fix_arcos_lacks_is_judged_by_the_upstream_ref(upstream, status):
+    vuln = {"id": "OSV-1", "references": [
+        {"type": "FIX", "url": "https://github.com/demo/demo/commit/" + "a" * 40}]}
+    context = _context(contains=lambda sha: False, upstream_contains=upstream)
+    [finding] = _osv_answer(vuln, context).findings
+    assert finding.status == status
 
 
 def test_an_unavailable_source_says_so_and_changes_nothing(world, tmp_path):

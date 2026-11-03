@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from ...domain.enums import ErrorCode
 from ...domain.models import ResolutionEvidence, UpstreamResolution
 from ...services.upstream_service import UpstreamServiceError
-from ..deps import container
+from ..deps import container, require_write_access
 from ..schemas import (
     ContentBaseApprovalRequest, ManualUpstreamRequest, ResolveRequest,
 )
@@ -56,7 +56,7 @@ def evidence(
 
 
 @router.post("/upstream/content-base/approve")
-def approve_content_base(request: ContentBaseApprovalRequest,
+def approve_content_base(request: ContentBaseApprovalRequest, http: Request,
                          app=Depends(container)):
     """Record a person's approval of a content-matched base tag.
 
@@ -64,6 +64,7 @@ def approve_content_base(request: ContentBaseApprovalRequest,
     takes effect when the package is next resolved; nothing is re-resolved or
     compared here.
     """
+    require_write_access(http, app)
     if not request.confirm:
         raise UpstreamServiceError(
             ErrorCode.INVALID_REQUEST, "Approving a content base needs confirm=true.")

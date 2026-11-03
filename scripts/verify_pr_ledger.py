@@ -4,7 +4,8 @@
     python scripts/verify_pr_ledger.py [release]
 
 Invariants that must hold whatever happened during the run:
-  - every branch the tool created is under upstream-metadata/
+  - every branch the tool created is debian-upstream-tracking or under
+    upstream-metadata/
   - no recorded branch is the branch it targets
   - every PR_OPENED / PR_EXISTS entry has a pushed commit and a PR URL
   - every BRANCH_PUSHED entry (a push-only run) was pushed, names a full
@@ -22,6 +23,14 @@ import json
 import re
 import sys
 from pathlib import Path
+
+
+def metadata_branch(name: str) -> bool:
+    """debian-upstream-tracking, or a name under it or upstream-metadata/: the
+    publisher's rule, restated rather than imported."""
+    return name == "debian-upstream-tracking" or any(
+        name.startswith(prefix) and len(name) > len(prefix)
+        for prefix in ("debian-upstream-tracking/", "upstream-metadata/"))
 
 ROOT = Path(__file__).resolve().parents[1]
 failures = []
@@ -42,9 +51,8 @@ def main(release: str) -> int:
     entries = json.loads(ledger_path.read_text())["entries"]
 
     branches = [e for e in entries if e.get("branch")]
-    outside = [e["package"] for e in branches
-               if not e["branch"].startswith("upstream-metadata/")]
-    check("every branch is under upstream-metadata/", not outside,
+    outside = [e["package"] for e in branches if not metadata_branch(e["branch"])]
+    check("every branch is one this workflow creates", not outside,
           ", ".join(outside))
     onto_base = [e["package"] for e in branches
                  if e["branch"] == e.get("base_branch")]
