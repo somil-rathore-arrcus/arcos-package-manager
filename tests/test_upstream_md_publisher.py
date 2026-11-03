@@ -1546,3 +1546,15 @@ def test_this_packages_pr_under_the_shared_name_still_counts(tmp_path):
 
     assert again.status is PublishStatus.PR_CLOSED
     assert github.created == [] and len(publisher.workspaces.pushes) == 1
+
+
+def test_a_pull_request_that_could_not_be_opened_keeps_the_link(env):
+    remote, github, publisher, target = env
+    github.fail_create = "Validation Failed"
+
+    result = publisher.publish(target, apply=True)
+
+    assert result.status is PublishStatus.PR_FAILED
+    assert remote.ref(BRANCH) == result.commit
+    assert result.pr_create_url.startswith(
+        f"https://github.com/Arrcus/mstpd/compare/aminor...{BRANCH}")

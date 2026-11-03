@@ -142,6 +142,8 @@ class GitHubService:
         response = self._request("GET", f"/repos/{slug}")
         if response.status_code == 200:
             return response.json()
+        if _rate_limited(response):
+            raise _rate_limit_error(response)
         sso = response.headers.get("X-GitHub-SSO", "")
         if response.status_code == 401:
             raise GitHubError(
@@ -181,24 +183,24 @@ class GitHubService:
             "GET", f"/repos/{slug}/pulls",
             params={"head": f"{owner}:{head_branch}", "base": base, "state": state},
         )
-        if response.status_code != 200:
-            return None
-        items = response.json()
-        if not items:
-            return None
-        return _to_pull_request(items[0], already_existed=True)
+        if response.status_code == 200:
+            items = response.json()
+            return _to_pull_request(items[0], already_existed=True) if items else None
+        # "Could not ask" is not "there is none": a caller deciding whether a
+        # merged or closed pull request already settled a branch must not push
+        # past one it could not see.
+        _raise_for(response, slug)
 
     def get_pull_request(self, slug: str, number: int) -> PullRequest:
+        self._require_token()
         response = self._request("GET", f"/repos/{slug}/pulls/{number}")
+        if response.status_code == 200:
+            return _to_pull_request(response.json())
         if response.status_code == 404:
             raise GitHubError(
                 ErrorCode.NOT_FOUND, f"No pull request {slug}#{number}."
             )
-        if response.status_code >= 400:
-            raise GitHubError(
-                ErrorCode.INTERNAL, _message(response), response.text[:400]
-            )
-        return _to_pull_request(response.json())
+        _raise_for(response, slug)
 
     def ci_status(self, slug: str, sha: str) -> CiStatus:
         """The checks GitHub reports for `sha`: check runs and commit statuses.
@@ -216,13 +218,20 @@ class GitHubService:
                        "them.",
             )
         try:
-            runs = self._request("GET", f"/repos/{slug}/commits/{sha}/check-runs",
-                                 params={"per_page": 100})
-            statuses = self._request("GET", f"/repos/{slug}/commits/{sha}/status")
+            runs, run_items = self._all_pages(
+                f"/repos/{slug}/commits/{sha}/check-runs", "check_runs")
+            statuses, status_items = self._all_pages(
+                f"/repos/{slug}/commits/{sha}/status", "statuses")
         except GitHubError as exc:
             return CiStatus(state=CiState.UNAVAILABLE, sha=sha,
                             reason=f"GitHub could not be reached: {exc}")
         for response in (runs, statuses):
+            if _rate_limited(response):
+                return CiStatus(
+                    state=CiState.UNAVAILABLE, sha=sha,
+                    reason=f"GitHub's API rate limit was reached "
+                           f"({_message(response)}); checks were not read.",
+                )
             if response.status_code in (401, 403, 404):
                 return CiStatus(
                     state=CiState.UNAVAILABLE, sha=sha,
@@ -236,6 +245,14 @@ class GitHubService:
                            f"{_message(response)}",
                 )
 
+        if run_items is None or status_items is None:
+            # More checks than were read: a failure among the rest must not be
+            # summarised as a pass.
+            return CiStatus(
+                state=CiState.UNAVAILABLE, sha=sha,
+                reason=f"More than {_MAX_PAGES * 100} checks are reported on "
+                       f"{sha[:12]}; they were not all read.",
+            )
         checks = [
             CheckRun(
                 name=run.get("name", ""), status=run.get("status", ""),
@@ -243,9 +260,9 @@ class GitHubService:
                 url=run.get("html_url") or run.get("details_url"),
                 summary=((run.get("output") or {}).get("title") or ""),
             )
-            for run in runs.json().get("check_runs", [])
+            for run in run_items
         ]
-        for status in statuses.json().get("statuses", []) or []:
+        for status in status_items:
             state = status.get("state", "")
             checks.append(CheckRun(
                 name=status.get("context", ""),
@@ -256,6 +273,24 @@ class GitHubService:
                 summary=status.get("description") or "",
             ))
         return CiStatus(state=_ci_state(checks), sha=sha, checks=checks)
+
+    def _all_pages(self, path: str, key: str):
+        """(the last response, every item under `key`) - or (response, None)
+        when GitHub reports more than _MAX_PAGES pages. Stops at an error
+        response, which the caller reports."""
+        items: list = []
+        for page in range(1, _MAX_PAGES + 1):
+            response = self._request("GET", path,
+                                     params={"per_page": 100, "page": page})
+            if response.status_code != 200:
+                return response, []
+            payload = response.json()
+            batch = payload.get(key, []) or []
+            items += batch
+            total = payload.get("total_count")
+            if not batch or total is None or len(items) >= total:
+                return response, items
+        return response, None
 
     # -- writes ------------------------------------------------------------
 
@@ -278,6 +313,8 @@ class GitHubService:
                 "base": base, "draft": draft,
             },
         )
+        if _rate_limited(response):
+            raise _rate_limit_error(response)
         if response.status_code == 401:
             raise GitHubError(
                 ErrorCode.AUTH_REQUIRED,
@@ -539,6 +576,60 @@ def _to_pull_request(payload: dict, already_existed: bool = False) -> PullReques
         head_sha=(payload.get("head") or {}).get("sha"),
         draft=bool(payload.get("draft")),
         already_existed=already_existed,
+    )
+
+
+_MAX_PAGES = 10
+
+
+def _rate_limited(response: httpx.Response) -> bool:
+    """GitHub's quota answer: 429, or 403 with none of the quota left."""
+    if response.status_code == 429:
+        return True
+    return response.status_code == 403 and (
+        response.headers.get("X-RateLimit-Remaining") == "0"
+        or "rate limit" in _message(response).lower()
+    )
+
+
+def _rate_limit_error(response: httpx.Response) -> GitHubError:
+    when = ""
+    reset = response.headers.get("X-RateLimit-Reset", "")
+    if reset.isdigit():
+        from datetime import datetime, timezone
+        when = " until " + datetime.fromtimestamp(
+            int(reset), tz=timezone.utc).strftime("%H:%M UTC")
+    elif response.headers.get("Retry-After", "").isdigit():
+        when = f" for {response.headers['Retry-After']}s"
+    return GitHubError(
+        ErrorCode.RATE_LIMITED,
+        f"GitHub's API rate limit is reached{when}. Nothing was changed; "
+        f"retry then.",
+        _message(response),
+    )
+
+
+def _raise_for(response: httpx.Response, slug: str) -> None:
+    """Raise the GitHubError a failed read means: the quota, the token, or a
+    repository the token cannot see."""
+    if _rate_limited(response):
+        raise _rate_limit_error(response)
+    if response.status_code == 401:
+        raise GitHubError(
+            ErrorCode.AUTH_REQUIRED,
+            "GitHub rejected the token. Check it is valid and not expired.",
+        )
+    if response.status_code in (403, 404):
+        raise GitHubError(
+            ErrorCode.NOT_FOUND if response.status_code == 404
+            else ErrorCode.AUTH_REQUIRED,
+            f"The token cannot see {slug}. For a private repository this "
+            f"usually means the token's repository access or scope, not the "
+            f"spelling.",
+            _message(response),
+        )
+    raise GitHubError(
+        ErrorCode.INTERNAL, f"GitHub: {_message(response)}", response.text[:400],
     )
 
 

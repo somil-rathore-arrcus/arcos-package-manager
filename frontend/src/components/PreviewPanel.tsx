@@ -154,11 +154,16 @@ export function PreviewPanel({
               {result.pushed ? ' — pushed.' : ' — not pushed.'}
             </p>
           )}
-          {pushed && !canCreatePr && result.pr_create_url && !pullRequest && (
+          {pushed && result.pr_create_url && !pullRequest && (
             <p style={{ marginTop: 6 }}>
               <ExternalLink href={result.pr_create_url}>Open the pull request on GitHub</ExternalLink>
-              <span className="small"> — no pull request was created; a person with access
-                to the repository opens it from this pre-filled form.</span>
+              <span className="small">
+                {canCreatePr
+                  ? ' — or create it here; if that fails, a person with access to the '
+                    + 'repository opens it from this pre-filled form.'
+                  : ' — no pull request was created; a person with access to the '
+                    + 'repository opens it from this pre-filled form.'}
+              </span>
             </p>
           )}
         </div>

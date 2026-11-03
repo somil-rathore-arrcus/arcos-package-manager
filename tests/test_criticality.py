@@ -68,3 +68,34 @@ def test_duplicate_cves_are_listed_once():
 
 def test_empty_message():
     assert SERVICE.assess("", "").level is Criticality.UNKNOWN
+
+
+def test_a_security_trailer_in_the_body_is_critical():
+    result = SERVICE.assess("lib: tighten length check",
+                            "Long explanation.\n\nSecurity: heap overflow on long input\n")
+    assert result.level is Criticality.CRITICAL
+
+
+@pytest.mark.parametrize("subject", [
+    "security: remove unneeded semicolon",
+    "Vulnerability: typo in comment",
+])
+def test_a_subsystem_prefix_in_the_subject_is_not_a_security_trailer(subject):
+    assert SERVICE.assess(subject, "").level is Criticality.UNKNOWN
+
+
+def test_a_revert_of_a_cve_fix_is_never_critical_on_that_cve():
+    result = SERVICE.assess(
+        'Revert "net: fix overflow (CVE-2024-1234)"',
+        "This reverts commit 0123456789ab.\n")
+
+    assert result.level is not Criticality.CRITICAL
+    assert result.cve_ids == []
+    assert any("may undo a security fix" in e and "CVE-2024-1234" in e
+               for e in result.evidence)
+
+
+def test_a_revert_that_is_itself_nominated_for_stable_keeps_that():
+    result = SERVICE.assess('Revert "x: fix DSA-5555-1 regression"',
+                            "This reverts commit 0123456.\n\nCc: stable@vger.kernel.org\n")
+    assert result.level is Criticality.STABLE_RELEVANT

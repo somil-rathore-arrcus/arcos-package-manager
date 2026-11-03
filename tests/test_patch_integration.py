@@ -261,3 +261,84 @@ def test_a_validated_push_records_what_was_applied_and_checked(world):
     [commit] = result.commits
     assert commit.sha == world["shas"]["D"] and commit.subject == "commit D"
     assert commit.author and commit.date
+
+
+# -- a pushed patch branch is always new, always ours, and exactly what was applied
+
+def _bare(world, name):
+    bare = world["root"] / name
+    fx.git(world["root"], "clone", "-q", "--bare", str(world["arcos"]), str(bare))
+    return bare
+
+
+@pytest.mark.parametrize("name,base", [
+    ("main", "refs/heads/main"),          # the target, spelled another way
+    ("release", "main"),                  # any branch outside upstream/
+    ("upstream/", "main"),
+    ("upstream/demo/../main", "main"),
+    ("upstream/demo/x y", "main"),
+])
+def test_a_patch_branch_outside_upstream_is_refused_before_anything_runs(
+        world, name, base):
+    bare = _bare(world, f"refused-{abs(hash(name))}.git")
+    main = fx.git(bare, "rev-parse", "main")
+
+    with pytest.raises(PatchError) as excinfo:
+        _service(world["root"]).cherry_pick(
+            _selection(world, [world["shas"]["D"]]), str(world["arcos"]),
+            branch_name=name, base_ref=base, push=True, push_url=str(bare))
+
+    assert excinfo.value.code is ErrorCode.INVALID_REQUEST
+    assert fx.git(bare, "rev-parse", "main") == main
+
+
+def test_an_existing_branch_is_never_extended(world):
+    bare = _bare(world, "existing.git")
+    fx.git(bare, "branch", "upstream/demo/taken", "main")
+    taken = fx.git(bare, "rev-parse", "upstream/demo/taken")
+
+    with pytest.raises(PatchError) as excinfo:
+        _service(world["root"]).cherry_pick(
+            _selection(world, [world["shas"]["D"]]), str(world["arcos"]),
+            branch_name="upstream/demo/taken", push=True, push_url=str(bare))
+
+    assert excinfo.value.code is ErrorCode.CONFLICT
+    assert fx.git(bare, "rev-parse", "upstream/demo/taken") == taken
+
+
+def test_a_validation_that_commits_does_not_reach_the_pushed_branch(world):
+    bare = _bare(world, "validated.git")
+    service = _validating(world["root"], [
+        "git -c user.name=v -c user.email=v@x commit -q --allow-empty -m 'from validation'"])
+
+    result = service.cherry_pick(
+        _selection(world, [world["shas"]["D"]]), str(world["arcos"]),
+        branch_name="upstream/demo/validated", push=True, push_url=str(bare))
+
+    assert result.pushed and result.validation.passed is True
+    pushed = fx.git(bare, "rev-parse", "upstream/demo/validated")
+    assert pushed == result.head_sha
+    assert fx.git(bare, "log", "-1", "--format=%s", pushed) == "commit D"
+
+
+def test_a_failure_that_is_not_a_conflict_is_not_called_one(world, monkeypatch):
+    from apm.gitio.transport import GitResult
+    from apm.gitio.workspace import GitWorkspace
+
+    monkeypatch.setattr(GitWorkspace, "cherry_pick",
+                        lambda self, sha: GitResult(False, "", f"fatal: bad object {sha}"))
+
+    preview = _service(world["root"]).preview(
+        _selection(world, [world["shas"]["D"]]), str(world["arcos"]))
+
+    assert preview.outcome is PreviewOutcome.FAILED
+    assert preview.conflicts == []
+    assert "could not be applied" in preview.message
+
+
+def test_a_validation_command_may_end_with_a_comment(world):
+    preview = _validating(world["root"], ["test -f E.txt  # E is applied"]).preview(
+        _selection(world, [world["shas"]["D"], world["shas"]["E"]]), str(world["arcos"]))
+
+    assert preview.validation.passed is True
+    assert [r.exit_code for r in preview.validation.runs] == [0]

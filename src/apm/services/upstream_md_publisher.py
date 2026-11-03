@@ -804,6 +804,8 @@ class UpstreamMdPublisher:
         except GitHubError as exc:
             result.status = PublishStatus.PR_FAILED
             result.error = f"{exc} {exc.detail}".strip()[:400]
+            # The branch is pushed; a person can still open the pull request.
+            self._attach_link(target, result)
             return result
         result.pull_request = pr
         result.error = None

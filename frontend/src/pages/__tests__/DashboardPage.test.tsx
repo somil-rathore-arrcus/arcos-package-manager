@@ -317,6 +317,24 @@ describe('patch workflow', () => {
     expect(pick.body).toMatchObject({ expected_base_sha: fx.cleanPreview.base_sha })
   })
 
+  it('a different selection needs its own preview before anything is pushed', async () => {
+    const recorded = await selectAndPreview()
+
+    await user.click(screen.getByLabelText(`Select ${'d'.repeat(12)}`))
+
+    expect(screen.queryByText('Patch PR · preview')).toBeNull()
+    expect(screen.queryByRole('button', { name: /create patch branch/i })).toBeNull()
+    expect(recorded.calls.some((c) => c.path === '/patches/cherry-pick')).toBe(false)
+  })
+
+  it('pushes exactly the commits that were previewed', async () => {
+    const recorded = await selectAndPreview()
+    await user.click(screen.getByRole('button', { name: /create patch branch/i }))
+    await screen.findByText(/patch branch created/i)
+    const pick = recorded.calls.find((c) => c.path === '/patches/cherry-pick')!
+    expect(pick.body).toMatchObject({ shas: fx.cleanPreview.order })
+  })
+
   it('in read-only mode pushes the patch branch only when asked, and links the PR form', async () => {
     const recorded = await selectAndPreview({ health: fx.healthNoToken })
 
@@ -349,6 +367,15 @@ describe('patch workflow', () => {
     expect(screen.queryByRole('button', { name: /create patch branch|push patch branch/i }))
       .toBeNull()
     expect(recorded.calls.some((c) => c.path === '/patches/cherry-pick')).toBe(false)
+  })
+
+  it('with a token, still offers the pre-filled link beside creating the PR', async () => {
+    await selectAndPreview()
+    await user.click(screen.getByRole('button', { name: /create patch branch/i }))
+    await screen.findByText(/patch branch created/i)
+    expect(screen.getByRole('button', { name: /create pull request/i })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /open the pull request on github/i }))
+      .toBeInTheDocument()
   })
 
   it('opens the PR with the description the backend wrote', async () => {
@@ -456,6 +483,24 @@ describe('upstream.md', () => {
 
     expect(await screen.findByText(/CONFLICT: debian\/upstream.md was not written/))
       .toBeInTheDocument()
+  })
+
+  it('keeps the link to open the PR when the branch was pushed but GitHub refused it', async () => {
+    await openDashboard({
+      upstreamMdPr: {
+        ...fx.upstreamMdPushed, status: 'PR_FAILED',
+        error: 'GitHub refused the pull request: Validation Failed',
+      },
+    })
+    await resolve()
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
+    await screen.findByText('CREATED')
+    await user.click(screen.getByRole('button', { name: /create pull request/i }))
+
+    expect(await screen.findByText(/PR_FAILED: GitHub refused the pull request/))
+      .toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /open the pull request on github/i }))
+      .toHaveAttribute('href', fx.upstreamMdPushed.pr_create_url)
   })
 
   it('dry-runs a proposal without pushing, and shows where it would go', async () => {

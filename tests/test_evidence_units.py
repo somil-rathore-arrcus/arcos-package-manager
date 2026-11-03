@@ -492,3 +492,113 @@ def test_the_kernel_series_is_not_padded_with_the_mainline_tip():
     specs = upstream_candidates("k", listing, "6.1.150", None, ["linux"],
                                 "linux-6.1.y", RefStrategy.KERNEL_SERIES)
     assert [s.ref for s in specs] == ["v6.1.150", "linux-6.1.y"]
+
+
+# -- another ARCoS branch than the one the mapping verified -------------------
+
+def _retarget_world(tmp_path):
+    from apm.domain.models import Package
+    from apm.gitio.verify import Verifier
+    from apm.gitio.workspaces import WorkspaceManager
+    from apm.services.upstream_service import UpstreamService
+
+    up = fx.init(tmp_path / "up")
+    fx.commit(up, "a", "a\n", "a")
+    arcos = fx.clone(up, tmp_path / "arcos")
+    pinned = fx.git(arcos, "rev-parse", "HEAD")
+    fx.commit(up, "b", "b\n", "upstream moves on")
+    fx.git(arcos, "checkout", "-q", "-b", "next")
+    fx.commit(arcos, "c", "c\n", "ARCoS work on next")
+    fx.git(arcos, "checkout", "-q", "--orphan", "stray")
+    fx.commit(arcos, "z", "z\n", "unrelated import")
+    fx.git(arcos, "checkout", "-q", "main")
+
+    verified = UpstreamResolution(
+        package="demo", debian_release="bookworm",
+        status=ResolutionStatus.VERIFIED,
+        verification_level=VerificationLevel.SHARED_HISTORY,
+        arcos_repository=str(arcos), arcos_branch="main", arcos_commit=pinned,
+        upstream_repository=Repository(url=str(up)), upstream_ref="main",
+        merge_base=pinned, merge_bases=[pinned], behind=1, arcos_only=0)
+
+    class Mapping:
+        def __init__(self, row):
+            self.row = row
+
+        def get(self, package, release):
+            return self.row.model_copy(deep=True)
+
+    class Catalog:
+        def package(self, name):
+            return Package(name="demo", arcos_repository=str(arcos),
+                           github_repository="Arrcus/demo",
+                           releases=["bookworm"])
+
+    class Settings:
+        packaging_hosts = set()
+
+    transports = Transports(backend="local")
+
+    def service(row=verified):
+        return UpstreamService(
+            None, Catalog(), Verifier(transports), Settings(), mapping=Mapping(row),
+            workspaces=WorkspaceManager(transports, root=str(tmp_path / "ws"),
+                                        private_url_hint="file:///x"))
+    return service, verified
+
+
+@git_required
+def test_a_branch_that_descends_from_the_verified_commit_is_measured_again(tmp_path):
+    service, _ = _retarget_world(tmp_path)
+
+    resolution = service().resolve("demo", "bookworm", arcos_branch="next")
+
+    assert resolution.status is ResolutionStatus.VERIFIED
+    assert resolution.verification_level is VerificationLevel.SHARED_HISTORY
+    assert (resolution.behind, resolution.arcos_only) == (1, 1)
+
+
+@git_required
+def test_an_unrelated_branch_is_never_called_verified(tmp_path):
+    service, _ = _retarget_world(tmp_path)
+
+    resolution = service().resolve("demo", "bookworm", arcos_branch="stray")
+
+    assert resolution.status is ResolutionStatus.NEEDS_REVIEW
+    assert ReviewReason.NO_SHARED_HISTORY in resolution.review_reasons
+    assert resolution.merge_base is None and resolution.behind is None
+
+
+@git_required
+def test_a_content_base_does_not_carry_over_to_another_branch(tmp_path):
+    service, verified = _retarget_world(tmp_path)
+    matched = verified.model_copy(update={
+        "verification_level": VerificationLevel.CONTENT_MATCH_APPROVED})
+
+    resolution = service(matched).resolve("demo", "bookworm", arcos_branch="next")
+
+    assert resolution.status is ResolutionStatus.NEEDS_REVIEW
+    assert ReviewReason.ANCESTRY_NOT_PROBED in resolution.review_reasons
+
+
+@git_required
+def test_the_pinned_branch_is_served_as_mapped(tmp_path):
+    service, verified = _retarget_world(tmp_path)
+
+    resolution = service().resolve("demo", "bookworm", arcos_branch="main")
+
+    assert resolution.status is ResolutionStatus.VERIFIED
+    assert (resolution.behind, resolution.arcos_commit) == (1, verified.arcos_commit)
+
+
+@git_required
+def test_another_branch_never_shows_the_pinned_commits_backlog(tmp_path):
+    service, verified = _retarget_world(tmp_path)
+    snapshot = ComparisonSnapshot(
+        arcos_commit=verified.arcos_commit, upstream_repository="up",
+        upstream_ref="main", upstream_commit="u" * 40)
+    with_snapshot = verified.model_copy(update={"comparison": snapshot})
+
+    assert service(with_snapshot).resolve("demo", "bookworm").comparison == snapshot
+    assert service(with_snapshot).resolve(
+        "demo", "bookworm", arcos_branch="next").comparison is None

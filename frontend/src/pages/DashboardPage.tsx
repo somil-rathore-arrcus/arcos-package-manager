@@ -102,9 +102,11 @@ export function DashboardPage() {
   const apply = useAsyncAction(async () => {
     if (!patchRequest || !preview.data?.base_sha) return null
     // Applied only onto the exact tip the preview ran on; the server refuses
-    // if the target branch has moved since.
+    // if the target branch has moved since. The commits are the ones that
+    // were previewed, whatever is ticked now.
     const result = await api.cherryPick({
-      ...patchRequest, push: true, expected_base_sha: preview.data.base_sha,
+      ...patchRequest, shas: preview.data.order, push: true,
+      expected_base_sha: preview.data.base_sha,
     })
     setCherryPick(result)
     return result
@@ -145,6 +147,8 @@ export function DashboardPage() {
       arcos_branch: selection.branch.trim() || undefined, confirm: true,
     })
     if (!result.pull_request) {
+      // Pushed, but GitHub would not open the pull request: its link still can.
+      if (result.pushed && result.pr_create_url) setMdPushed(result)
       throw new Error(`${result.status}${result.error ? `: ${result.error}` : ''}`)
     }
     setMdPr(result.pull_request)
@@ -206,9 +210,9 @@ export function DashboardPage() {
           {health.data && !canCreatePr && (
             <span
               className="badge tone-neutral"
-              title={'No GitHub token is configured. Patch branches cannot be pushed; '
-                + 'a debian/upstream.md branch can be pushed over SSH and its pull '
-                + 'request opened from a GitHub link.'}
+              title={'No GitHub token is configured. Patch and debian/upstream.md '
+                + 'branches can still be pushed over SSH; each pull request is opened '
+                + 'from a pre-filled GitHub link.'}
             >
               Read-only mode — no GitHub token; the tool opens no pull requests
             </span>
@@ -276,7 +280,12 @@ export function DashboardPage() {
           <CommitTable
             comparison={comparison.data}
             selected={selected}
-            onSelectedChange={setSelected}
+            onSelectedChange={(next) => {
+              setSelected(next)
+              // A preview describes the selection it ran on. Until something
+              // is pushed, another selection needs a preview of its own.
+              if (!cherryPick) { preview.reset(); apply.reset() }
+            }}
             onPreview={() => preview.run()}
             previewing={preview.loading}
           />

@@ -289,4 +289,7 @@ class ErrorCode(str, Enum):
     # This deployment's own API token (APM_API_TOKEN), not GitHub's, is needed
     # for a request that pushes, opens a pull request or records an approval.
     API_TOKEN_REQUIRED = "API_TOKEN_REQUIRED"
+    # GitHub's API quota is spent: nothing is wrong with the token or the
+    # repository, and retrying later is the whole remedy.
+    RATE_LIMITED = "RATE_LIMITED"
     INTERNAL = "INTERNAL"

@@ -393,3 +393,91 @@ def test_patch_pr_body_reports_each_validation_command():
     body = build_patch_pr_body(_patch_resolution(), _patch_result(validation=validation))
     assert "`debian/rules build` — exit 0 (12.5s)" in body
     assert "All 1 validation command(s) passed." in body
+
+
+# -- failures a caller must be able to tell apart -------------------------------
+
+def _answer(status, headers=None, message="Forbidden"):
+    def handler(request):
+        return httpx.Response(status, headers=headers or {}, json={"message": message})
+    return _service(handler)
+
+
+@pytest.mark.parametrize("status,code", [
+    (401, ErrorCode.AUTH_REQUIRED), (403, ErrorCode.AUTH_REQUIRED),
+    (404, ErrorCode.NOT_FOUND), (500, ErrorCode.INTERNAL),
+])
+def test_a_pull_request_lookup_that_fails_says_so_instead_of_none(status, code):
+    with pytest.raises(GitHubError) as excinfo:
+        _answer(status).find_pull_request("Arrcus/mstpd", "b", "aminor", state="all")
+    assert excinfo.value.code is code
+
+
+@pytest.mark.parametrize("status,headers,message", [
+    (429, {"Retry-After": "60"}, "Too Many Requests"),
+    (403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1793300000"},
+     "API rate limit exceeded"),
+    (403, {}, "You have exceeded a secondary rate limit"),
+])
+def test_a_spent_quota_is_a_rate_limit_not_a_bad_token(status, headers, message):
+    service = _answer(status, headers, message)
+    for call in (lambda: service.get_repository("Arrcus/mstpd"),
+                 lambda: service.find_pull_request("Arrcus/mstpd", "b", "aminor"),
+                 lambda: service.get_pull_request("Arrcus/mstpd", 7)):
+        with pytest.raises(GitHubError) as excinfo:
+            call()
+        assert excinfo.value.code is ErrorCode.RATE_LIMITED
+        assert "retry" in str(excinfo.value)
+
+
+def test_creating_a_pull_request_on_a_spent_quota_is_a_rate_limit():
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=[])
+        return httpx.Response(429, json={"message": "Too Many Requests"})
+    with pytest.raises(GitHubError) as excinfo:
+        _service(handler).create_pull_request("Arrcus/mstpd", "b", "aminor", "t", "b")
+    assert excinfo.value.code is ErrorCode.RATE_LIMITED
+
+
+def test_reading_a_pull_request_needs_a_token():
+    with pytest.raises(GitHubError) as excinfo:
+        _service(lambda r: httpx.Response(200, json=PR_PAYLOAD), token="") \
+            .get_pull_request("Arrcus/mstpd", 7)
+    assert excinfo.value.code is ErrorCode.AUTH_REQUIRED
+
+
+def test_a_failure_on_a_later_page_of_checks_is_not_a_pass():
+    pages = {
+        "1": [_run(f"ok-{i}") for i in range(100)],
+        "2": [_run("late", conclusion="failure")],
+    }
+
+    def handler(request):
+        if request.url.path.endswith("/check-runs"):
+            return httpx.Response(200, json={
+                "total_count": 101,
+                "check_runs": pages.get(request.url.params.get("page"), [])})
+        return httpx.Response(200, json={"total_count": 0, "statuses": []})
+
+    status = _service(handler).ci_status("Arrcus/mstpd", "c" * 40)
+    assert status.state is CiState.FAILURE
+    assert len(status.checks) == 101
+
+
+def test_more_checks_than_can_be_read_are_unavailable_not_a_pass():
+    def handler(request):
+        if request.url.path.endswith("/check-runs"):
+            return httpx.Response(200, json={"total_count": 5000,
+                                             "check_runs": [_run("ok")] * 100})
+        return httpx.Response(200, json={"statuses": []})
+
+    status = _service(handler).ci_status("Arrcus/mstpd", "c" * 40)
+    assert status.state is CiState.UNAVAILABLE
+    assert "not all read" in status.reason
+
+
+def test_a_spent_quota_leaves_checks_unavailable():
+    status = _answer(429, {}, "Too Many Requests").ci_status("Arrcus/mstpd", "c" * 40)
+    assert status.state is CiState.UNAVAILABLE
+    assert "rate limit" in status.reason

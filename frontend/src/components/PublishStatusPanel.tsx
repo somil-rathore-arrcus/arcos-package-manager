@@ -56,9 +56,10 @@ export function PublishStatusPanel({ pkg, branch, base }: {
             <p key={pr.number} className="small">
               Pull request{' '}
               <ExternalLink href={pr.url}>#{pr.number}</ExternalLink>{' '}
-              is open from this commit
+              was opened from this commit
               {report.pull_request?.number === pr.number && report.pull_request.state
-                ? ` (${report.pull_request.state})` : ''}.
+                ? ` (${report.pull_request.state})`
+                : ' (its state needs a GitHub token)'}.
             </p>
           ))}
           {report.pull_request?.url && !report.pull_requests.some(

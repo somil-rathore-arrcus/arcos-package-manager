@@ -9,6 +9,12 @@ const GUIDANCE: Record<string, string> = {
     'GitHub refused, or no GitHub credential is configured. If APM_GITHUB_TOKEN is empty, set it in the backend environment; if it is set, check it has not expired, can reach this repository with "Pull requests: Read and write", and is SSO-authorised. Without a token, push only and open the pull request from its link.',
   API_TOKEN_REQUIRED:
     'This deployment requires its own API token (APM_API_TOKEN) for actions that push, open a pull request or record an approval. Ask whoever runs it for the token and enter it below; it is kept for this browser tab only.',
+  RATE_LIMITED:
+    "GitHub's API quota is used up for now. Nothing is wrong with the token or the repository and nothing was changed; retry after the time given.",
+  NOT_FOUND:
+    'Not found. For a private GitHub repository this is also what a token without access to it sees, so check the token before the spelling.',
+  GIT_ERROR:
+    'git failed; its own message is under Technical detail.',
   REPOSITORY_UNAVAILABLE:
     'The repository could not be reached. Check the SSH bridge configuration; for a private repository this is also what missing access looks like.',
   BRANCH_NOT_FOUND:

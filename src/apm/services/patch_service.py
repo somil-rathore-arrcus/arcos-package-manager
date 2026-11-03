@@ -25,6 +25,7 @@ import logging
 import re
 import shlex
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -40,7 +41,31 @@ from ..gitio.workspace import (
 log = logging.getLogger(__name__)
 
 DEFAULT_BRANCH_TEMPLATE = "upstream/{package}/{timestamp}"
+# Every patch branch lives here: a name a caller supplies must too, so no
+# request can name a release branch, however it spells it.
+PATCH_BRANCH_PREFIX = "upstream/"
 _SAFE_BRANCH = re.compile(r"[^A-Za-z0-9._/-]+")
+_BAD_PATCH_BRANCH = re.compile(r"\.\.|//|/\.|\.lock(/|$)|/$|\.$")
+
+
+def validate_patch_branch(name: str, base: str) -> None:
+    """Refuse a patch branch this tool would not create. Raises PatchError."""
+    if (not name.startswith(PATCH_BRANCH_PREFIX)
+            or len(name) == len(PATCH_BRANCH_PREFIX)
+            or _SAFE_BRANCH.search(name) or _BAD_PATCH_BRANCH.search(name)):
+        raise PatchError(
+            ErrorCode.INVALID_REQUEST,
+            f"{name!r} is not a patch branch this tool creates: it must be under "
+            f"{PATCH_BRANCH_PREFIX} and use only letters, digits, '.', '_', '-' "
+            f"and '/'.",
+        )
+    target = base[len("refs/heads/"):] if base.startswith("refs/heads/") else base
+    if name == target:
+        raise PatchError(
+            ErrorCode.INVALID_REQUEST,
+            "The patch branch must differ from the target branch; this tool "
+            "never commits directly to the branch being tracked.",
+        )
 # Enough of a failing build's output to see why, without shipping megabytes.
 _OUTPUT_TAIL = 4000
 NOT_CONFIGURED = (
@@ -225,7 +250,9 @@ class PatchService:
             # The real exit status, reported on a marker line: the transport
             # only says whether the command succeeded.
             result = workspace.shell(
-                f"( {command} ); __rc=$?; echo \"{_EXIT_MARKER}$__rc\" >&2; "
+                # The newline ends a trailing "# comment" in the command
+                # before it can swallow the bracket and the marker.
+                f"( {command}\n); __rc=$?; echo \"{_EXIT_MARKER}$__rc\" >&2; "
                 f"exit $__rc",
                 timeout=self.validation_timeout,
             )
@@ -283,7 +310,8 @@ class PatchService:
             )
 
         workspace = self.workspaces.scratch(
-            f"preview-{selection.package}-{selection.debian_release}"
+            f"preview-{selection.package}-{selection.debian_release}-"
+            f"{uuid.uuid4().hex[:8]}"
         )
         workspace.destroy()
         try:
@@ -308,12 +336,17 @@ class PatchService:
             )
 
             if failed:
+                # No conflicted path means git failed for another reason - a
+                # merge commit, a timeout, a missing object - not a conflict.
                 return CherryPickPreview(
-                    outcome=PreviewOutcome.CONFLICT, applied=applied,
-                    failed_sha=failed, conflicts=conflicts,
+                    outcome=PreviewOutcome.CONFLICT if conflicts
+                    else PreviewOutcome.FAILED,
+                    applied=applied, failed_sha=failed, conflicts=conflicts,
                     message=(
-                        f"{failed[:12]} does not apply cleanly onto "
-                        f"{selection.arcos_branch} ({base[:12]}). "
+                        f"{failed[:12]} "
+                        + ("does not apply cleanly onto" if conflicts
+                           else "could not be applied onto")
+                        + f" {selection.arcos_branch} ({base[:12]}). "
                         f"{len(applied)} of {len(ordered)} applied before it."
                     ),
                     warnings=checks + ([_without_hints(stderr)[:400]]
@@ -370,15 +403,13 @@ class PatchService:
 
         base_branch = base_ref or selection.arcos_branch
         new_branch = branch_name or self.branch_name(selection.package)
-        if new_branch == base_branch:
-            raise PatchError(
-                ErrorCode.INVALID_REQUEST,
-                "The patch branch must differ from the target branch; this tool "
-                "never commits directly to the branch being tracked.",
-            )
+        validate_patch_branch(new_branch, base_branch)
 
+        # Its own directory: two requests for one package must not delete each
+        # other's work half way, and push what the other one applied.
         workspace = self.workspaces.scratch(
-            f"apply-{selection.package}-{selection.debian_release}"
+            f"apply-{selection.package}-{selection.debian_release}-"
+            f"{uuid.uuid4().hex[:8]}"
         )
         workspace.destroy()
         try:
@@ -404,16 +435,23 @@ class PatchService:
         if failed:
             workspace.destroy()
             return CherryPickResult(
-                outcome=PreviewOutcome.CONFLICT, package=selection.package,
+                outcome=PreviewOutcome.CONFLICT if conflicts
+                else PreviewOutcome.FAILED,
+                package=selection.package,
                 base_branch=base_branch, new_branch=new_branch, applied=applied,
                 base_sha=base, failed_sha=failed, conflicts=conflicts,
                 message=(
-                    f"{failed[:12]} conflicted; nothing was pushed and the "
-                    f"workspace was discarded."
+                    f"{failed[:12]} "
+                    + ("conflicted" if conflicts else
+                       f"could not be applied ({_without_hints(stderr)[:200]})")
+                    + "; nothing was pushed and the workspace was discarded."
                 ),
             )
 
         try:
+            # What was applied is what is pushed: a validation command that
+            # commits (gbp dch --commit) must not add to the branch.
+            head = workspace.rev_parse("HEAD")
             commits = self._describe(workspace, applied)
             validation = self._run_validation(workspace)
         except BaseException:
@@ -429,10 +467,26 @@ class PatchService:
                          f"workspace was discarded. {validation.message}"),
             )
 
-        head = workspace.rev_parse("HEAD")
         pushed = False
         if push:
-            result = workspace.push(push_url or arcos_repository, new_branch)
+            url = push_url or arcos_repository
+            try:
+                existing = workspace.remote_ref(url, f"refs/heads/{new_branch}")
+            except GitWorkspaceError as exc:
+                workspace.destroy()
+                raise PatchError(
+                    ErrorCode.REPOSITORY_UNAVAILABLE,
+                    f"Could not check whether {new_branch} exists; nothing was "
+                    f"pushed.", exc.stderr,
+                ) from exc
+            if existing is not None:
+                workspace.destroy()
+                raise PatchError(
+                    ErrorCode.CONFLICT,
+                    f"{new_branch} already exists on the fork at {existing[:12]}; "
+                    f"nothing was pushed. A patch branch is only ever created.",
+                )
+            result = workspace.push_commit(url, head, new_branch)
             pushed = result.ok
             if not pushed:
                 workspace.destroy()

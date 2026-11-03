@@ -854,3 +854,20 @@ def test_cors_allows_only_what_the_dashboard_sends(monkeypatch):
     assert allowed.headers["access-control-allow-origin"] == "http://dash.example"
     assert "access-control-allow-credentials" not in allowed.headers
     assert other.status_code == 400
+
+
+def test_a_git_failure_is_reported_as_one_not_as_a_bare_500(app_container, monkeypatch):
+    from apm.gitio.workspace import GitWorkspaceError
+
+    client, fake = app_container
+
+    def broken(*args, **kwargs):
+        raise GitWorkspaceError("git fetch failed", "fatal: could not read from remote")
+
+    monkeypatch.setattr(fake.patches, "cherry_pick", broken)
+    response = client.post("/api/patches/cherry-pick", json=PICK)
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "code": "GIT_ERROR", "message": "git failed: git fetch failed",
+        "detail": "fatal: could not read from remote"}
