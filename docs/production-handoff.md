@@ -53,13 +53,15 @@ From the host's mapping. Confirm each one in the regenerated plan
 
 | `Current Upstream Branch` | Packages | Flags expected (at least) |
 |---|---|---|
-| `master` or `main` | `cre2`, `hsflowd`, `ifupdown2`, `libdict`, `mstpd`, `oom`, `python-netfilterqueue`, `rtrlib`, `tacacs_plus`, `ydk-cpp`, `zenoh`, `zenoh-c` | `ifupdown2`: `FALLBACK_REF` - `master` is a fallback |
-| Another branch | `linux` → `linux-6.1.y`, `openssl` → `openssl-3.0`, `libyang1` → `libyang1` | `linux`, `openssl`: `MAPPING_WARNINGS` (a large gap to Debian's release) |
-| `N/A - no upstream branch verified; upstream tag <tag>` | `ethtool` `v6.1`, `iproute2` `v6.1.0`, `iputils` `20221126`, `libnl3` `libnl3_7_0`, `pyrad` `2.1`, `libpam-radius-auth` `release_2_0_0` | `BRANCH_NOT_VERIFIED`, `TAG_ONLY` |
-| ... followed by ` (the ARCoS fork does not contain this tag)` | `libpam-radius-auth` | also `BASE_TAG_NOT_IN_FORK` |
+| `master` or `main` | `cre2`, `hsflowd`, `ifupdown2`, `libdict`, `mstpd`, `oom`, `python-netfilterqueue`, `rtrlib`, `tacacs_plus`, `ydk-cpp` | `ifupdown2`: `FALLBACK_REF` - `master` is a fallback |
+| Another branch | `linux` → `linux-6.1.y`, `openssl` → `OpenSSL_1_1_1-stable`, `libyang1` → `libyang1`, `zenoh` and `zenoh-c` → `release/1.4.0` | `linux`: `MAPPING_WARNINGS` (a large gap to Debian's release); `openssl`: `MAPPING_WARNINGS` (the fork is 1.1.1w, Debian ships 3.0) |
+| The default branch the probe measured, derived from a tag | `ethtool` `master` (tag `v6.1`), `iproute2` `main` (`v6.1.0`), `iputils` `master` (`20221126`), `libnl3` `main` (`libnl3_7_0`), `pyrad` `master` (`2.1`), `libpam-radius-auth` `master` (`release_2_0_0`) | `BRANCH_FROM_TAG`; `libpam-radius-auth` also `BASE_TAG_NOT_IN_FORK` |
 
-For the six tag-only packages the file names the tag and claims no branch.
-That is the recorded fact; the tool does not guess a branch.
+For the six tag-only packages the mapping selects a tag. The file names the
+upstream default branch only because the ancestry probe measured it against the
+same ARCoS commit as holding the fork's base. `BRANCH_FROM_TAG` gives both
+counts, and a package without that measurement keeps
+`N/A - no upstream branch verified; upstream tag <tag>`.
 
 ### Waiting for a person (never published until resolved)
 

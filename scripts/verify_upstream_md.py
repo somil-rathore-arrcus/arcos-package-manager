@@ -9,7 +9,8 @@ anything is proposed.
 
 Each file must be exactly two fields, "Upstream Source" and "Current Upstream
 Branch". Standalone on purpose: it does not import apm, so a bug in the renderer
-cannot also be a bug in the check.
+cannot also be a bug in the check. A tag-only row's branch is re-derived here
+from the probe measurements in upstream-resolutions.json, beside the CSV.
 
     ./.venv/bin/python scripts/verify_upstream_md.py [bookworm]
 """
@@ -40,6 +41,7 @@ BRANCH = "Current Upstream Branch"
 NO_BRANCH = "N/A - no upstream branch verified"
 NOT_IN_FORK = " (the ARCoS fork does not contain this tag)"
 FLAG_BRANCH_NOT_VERIFIED = "BRANCH_NOT_VERIFIED"
+FLAG_BRANCH_FROM_TAG = "BRANCH_FROM_TAG"
 
 _FIELD = re.compile(
     rf"^({re.escape(SOURCE)}|{re.escape(BRANCH)})\s*:\s*(.*?)\s*$"
@@ -82,7 +84,31 @@ def shape_problem(package: str, text: str) -> Optional[str]:
     return None
 
 
-def field_problems(package: str, row: dict, value: Dict[str, str]) -> List[str]:
+def held_branch(row: dict, tag: str, candidates) -> Optional[str]:
+    """The branch a tag-only row's file names instead of N/A, or None.
+
+    The renderer's rule, restated: the upstream default branch the ancestry
+    probe measured against the same ARCoS commit, when it shares history with
+    the fork and the fork has no more commits outside it than outside the tag.
+    `candidates` are the row's probe measurements from upstream-resolutions.json;
+    without them nothing can be derived, so only the N/A forms are allowed.
+    """
+    url = (row.get("Upstream Repository") or "").strip()
+    measured = [c for c in candidates or []
+                if (c.get("repository") or "").strip() == url and url
+                and c.get("shares_history") and c.get("arcos_only") is not None]
+    tagged = [c for c in measured
+              if c.get("kind") == "tag" and (c.get("ref") or "").strip() == tag]
+    branch = [c for c in measured
+              if c.get("strategy") == "default_branch" and c.get("kind") == "branch"
+              and (c.get("ref") or "").strip() not in ("", "HEAD")]
+    if not tagged or not branch or branch[0]["arcos_only"] > tagged[0]["arcos_only"]:
+        return None
+    return branch[0]["ref"].strip()
+
+
+def field_problems(package: str, row: dict, value: Dict[str, str],
+                   candidates=None) -> List[str]:
     """Where a file's two values disagree with its mapping row."""
     problems = []
     status = (row.get("Resolution Status") or "").strip()
@@ -112,7 +138,8 @@ def field_problems(package: str, row: dict, value: Dict[str, str]) -> List[str]:
         # name the tag rather than pass it off as one. Compared whole, so a
         # longer tag, an added branch or a fork note the row does not support
         # cannot hide behind the right prefix.
-        allowed = _tag_values(row, mapped_tag)
+        held = held_branch(row, mapped_tag, candidates)
+        allowed = [held] if held else _tag_values(row, mapped_tag)
         if branch not in allowed:
             problems.append(f"{package} {BRANCH}: file={branch!r} "
                             f"want={' or '.join(repr(a) for a in allowed)}")
@@ -162,6 +189,18 @@ def plan_entry_problems(entry: dict, text: str) -> List[str]:
             f"{'set' if flagged else 'missing'} but the branch field is "
             f"{value.get(BRANCH)!r}"
         )
+    # A branch derived from a tag is written, but always flagged for review.
+    from_tag = FLAG_BRANCH_FROM_TAG in {
+        f.get("code") for f in entry.get("flags") or []
+    }
+    derived = bool(entry.get("upstream_tag")) and not unverified
+    if from_tag != derived:
+        problems.append(
+            f"{package}: {FLAG_BRANCH_FROM_TAG} is "
+            f"{'set' if from_tag else 'missing'} but the plan records tag "
+            f"{entry.get('upstream_tag') or 'none'} and branch field "
+            f"{value.get(BRANCH)!r}"
+        )
     return problems
 
 
@@ -178,6 +217,13 @@ def main(release: str) -> int:
         return 2
 
     rows = {r["Package"]: r for r in csv.DictReader(mapping_path.open())}
+    # The probe's measurements, which the CSV does not carry.
+    resolutions_path = ROOT / "out" / "upstream-resolutions.json"
+    measured = {}
+    if resolutions_path.exists():
+        for item in json.loads(resolutions_path.read_text()).get("resolutions", []):
+            if item.get("debian_release") == release:
+                measured[item["package"]] = item.get("candidates") or []
     generated = {
         path.parent.parent.name: path
         for path in md_dir.glob("*/debian/upstream.md")
@@ -202,7 +248,8 @@ def main(release: str) -> int:
             shape.append(problem)
         value = parse_fields(text)
         if value is not None and package in rows:
-            mismatches += field_problems(package, rows[package], value)
+            mismatches += field_problems(package, rows[package], value,
+                                         measured.get(package))
 
     check("every file has exactly the two fields and nothing else", not shape,
           "; ".join(shape[:5]))

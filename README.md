@@ -66,7 +66,9 @@ Run from the checkout directory on the server.
   history (or a content match a person approved) makes a package `VERIFIED`.
 - `debian/upstream.md` writes only recorded facts. A branch that was not
   verified is written as `N/A` with the reason - for a tag-only upstream,
-  `N/A - no upstream branch verified; upstream tag <tag>` - never a guess.
+  `N/A - no upstream branch verified; upstream tag <tag>` - never a guess. A
+  tag-only upstream names a branch only when the ancestry probe measured the
+  upstream default branch as holding the fork's base, flagged `BRANCH_FROM_TAG`.
 - Only `VERIFIED` packages are ever proposed. `NEEDS_REVIEW`, `NO_UPSTREAM` and
   `FAILED` never are.
 - PRs go to the **ARCoS package repositories** (e.g. `Arrcus/mstpd`, branch
