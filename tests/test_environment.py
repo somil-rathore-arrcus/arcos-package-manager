@@ -49,3 +49,28 @@ def test_the_api_token_is_reported_only_as_set(clean_env):
     redacted = Environment.from_env().redacted()
     assert redacted["api_token_set"] is True
     assert "s3cret" not in str(redacted)
+
+
+@pytest.mark.parametrize("value,allowed", [
+    (None, False), ("", False), ("0", False), ("no", False), ("maybe", False),
+    ("1", True), ("true", True), ("YES", True), ("on", True),
+])
+def test_pushing_is_off_unless_this_machine_says_so(clean_env, value, allowed):
+    """APM_ALLOW_PUSH is set only on the machine that holds the ARCoS access."""
+    if value is not None:
+        clean_env.setenv("APM_ALLOW_PUSH", value)
+    env = Environment.from_env()
+    assert env.allow_push is allowed
+    assert env.redacted()["allow_push"] is allowed
+
+
+def test_the_workspaces_carry_the_push_switch(clean_env):
+    from apm.config import Settings
+    from apm.services.container import build_workspaces
+
+    for allowed in (False, True):
+        env = Environment(allow_push=allowed)
+        settings = Settings({})
+        workspaces = build_workspaces(env, settings, env.transports(settings))
+        assert workspaces.allow_push is allowed
+        assert workspaces.scratch("x").allow_push is allowed

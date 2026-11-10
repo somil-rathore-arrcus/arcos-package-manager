@@ -161,10 +161,13 @@ class PublishLedger:
 
     def render_markdown(self) -> str:
         lines = [
-            f"# debian/upstream.md pull requests - {self.release}",
+            f"# debian/upstream.md publishing records - {self.release}",
             "",
-            "| Package | Status | Branch | Commit | PR URL | Error |",
-            "|---|---|---|---|---|---|",
+            "No pull request is opened by this tool; each is opened by a person "
+            "from its Compare Link.",
+            "",
+            "| Package | Status | Branch | Commit | Compare Link | PR URL | Error |",
+            "|---|---|---|---|---|---|---|",
         ]
         for e in self.entries():
             if e.pull_request and e.pull_request.url:
@@ -176,7 +179,7 @@ class PublishLedger:
             error = (e.error or "").replace("|", "\\|").replace("\n", " ")
             lines.append(
                 f"| {e.package} | {e.status.value} | {e.branch} | "
-                f"{(e.commit or '')[:12]} | {url} | {error} |"
+                f"{(e.commit or '')[:12]} | {e.compare_url or ''} | {url} | {error} |"
             )
         return "\n".join(lines) + "\n"
 

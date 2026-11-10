@@ -56,13 +56,18 @@ export const reports = [
   },
 ]
 
+// The tool never opens a pull request; this deployment may push.
 export const health: HealthResponse = {
   status: 'ok', version: '0.1.0',
-  capabilities: { create_pull_requests: true, read_private_repositories: true },
+  capabilities: {
+    create_pull_requests: false, pull_requests: 'never', push_enabled: true,
+    read_only: false, read_private_repositories: true,
+  },
 }
 
-export const healthNoToken: HealthResponse = {
-  ...health, capabilities: { create_pull_requests: false },
+export const healthPushDisabled: HealthResponse = {
+  ...health,
+  capabilities: { ...health.capabilities, push_enabled: false, read_only: true },
 }
 
 export const resolution: UpstreamResolution = {
@@ -250,19 +255,6 @@ export const pullRequest: PullRequest = {
   head: 'upstream/pyrad/20260923-000000', draft: false, already_existed: false,
 }
 
-export const upstreamMdPublish: PublishResult = {
-  package: 'pyrad', release: 'bookworm', status: 'PR_OPENED',
-  repository: 'Arrcus/pyrad', base_branch: 'aminor',
-  branch: 'upstream-metadata/bookworm/pyrad', pinned_commit: '3b043f16bb8e',
-  base_sha: '3'.repeat(40), base_moved: false, outcome: 'CREATED',
-  commit: 'c'.repeat(40), pushed: true,
-  title: 'pyrad: add debian/upstream.md with verified upstream',
-  pull_request: {
-    ...pullRequest, url: 'https://github.com/Arrcus/pyrad/pull/43',
-    head: 'upstream-metadata/bookworm/pyrad',
-  },
-  pr_create_url: null, error: null, diff: null, updated_at: null,
-}
 
 export const upstreamMd: UpstreamMdDocument = {
   package: 'pyrad', debian_release: 'bookworm', path: 'debian/upstream.md',
@@ -272,15 +264,41 @@ export const upstreamMd: UpstreamMdDocument = {
   existing_content: null, diff: null, local_path: null, review_flags: [],
 }
 
-// Push-only: the form GitHub pre-fills, opened by a person once the branch is pushed.
-const prForm = 'https://github.com/Arrcus/pyrad/compare/aminor...upstream-metadata/bookworm/pyrad'
-  + '?quick_pull=1&title=pyrad%3A+add+debian%2Fupstream.md&body=Problem+Description+%3A'
+// The branch and target come from the reviewed plan, never from the client.
+const mdBranch = 'debian-upstream-tracking'
+const compareLink = `https://github.com/Arrcus/pyrad/compare/aminor...${mdBranch}`
+// The form GitHub pre-fills, opened by a person once the branch is pushed.
+const prForm = `${compareLink}?quick_pull=1&title=pyrad%3A+add+debian%2Fupstream.md`
+  + '&body=Problem+Description+%3A'
 
+// Nothing is on GitHub yet, so there is no Compare Link or file to show.
 export const upstreamMdDryRun: PublishResult = {
-  ...upstreamMdPublish, status: 'DRY_RUN_OK', commit: null, pushed: false,
-  pull_request: null, pr_create_url: prForm,
+  package: 'pyrad', release: 'bookworm', status: 'DRY_RUN_OK',
+  repository: 'Arrcus/pyrad', base_branch: 'aminor', branch: mdBranch,
+  pinned_commit: '3b043f16bb8e', base_sha: '3'.repeat(40), base_moved: false,
+  outcome: 'CREATED', commit: null, pushed: false,
+  title: 'pyrad: add debian/upstream.md with verified upstream',
+  pull_request: null, pr_create_url: prForm, covered_by: null,
+  error: null, diff: null, updated_at: null, compare_url: null, file_url: null,
 }
 
 export const upstreamMdPushed: PublishResult = {
   ...upstreamMdDryRun, status: 'BRANCH_PUSHED', commit: 'c'.repeat(40), pushed: true,
+  compare_url: compareLink,
+  file_url: `https://github.com/Arrcus/pyrad/blob/${mdBranch}/debian/upstream.md`,
+}
+
+// trixie's file is byte-for-byte bookworm's, for the same repository and
+// target: bookworm's branch already proposes it, so nothing is pushed.
+export const upstreamMdCovered: PublishResult = {
+  ...upstreamMdPushed, release: 'trixie', status: 'COVERED', pushed: false,
+  covered_by: 'bookworm', pr_create_url: null,
+}
+
+// A push that found a pull request already open from the branch. Shown, never acted on.
+export const upstreamMdPrFound: PublishResult = {
+  ...upstreamMdPushed, status: 'PR_EXISTS',
+  pull_request: {
+    ...pullRequest, url: 'https://github.com/Arrcus/pyrad/pull/43', head: mdBranch,
+  },
 }

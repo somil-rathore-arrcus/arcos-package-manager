@@ -33,6 +33,7 @@ import difflib
 import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..domain.enums import RefStrategy, ResolutionStatus, UpstreamMdOutcome
@@ -43,6 +44,13 @@ from ..domain.models import (
 log = logging.getLogger(__name__)
 
 UPSTREAM_MD_PATH = "debian/upstream.md"
+
+
+def review_dir(out_dir, release: str) -> Path:
+    """Where a release's reviewed files live: out/upstream-md-<release>/
+    <package>/debian/upstream.md. One folder per release, so regenerating one
+    release never replaces the files another release's plan was reviewed on."""
+    return Path(out_dir) / f"upstream-md-{release}"
 NONE = "N/A"
 
 SOURCE_LABEL = "Upstream Source"

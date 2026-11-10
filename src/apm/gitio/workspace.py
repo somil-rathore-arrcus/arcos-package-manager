@@ -56,13 +56,22 @@ class GitWorkspace:
     def __init__(self, transport, path: str, timeout: int = 60,
                  long_timeout: int = 900,
                  committer_name: str = "ARCoS Package Manager",
-                 committer_email: str = "arcos@localhost") -> None:
+                 committer_email: str = "arcos@localhost",
+                 allow_push: bool = True) -> None:
         self.transport = transport
         self.path = path
         self.timeout = timeout
         self.long_timeout = long_timeout
         self.committer_name = committer_name
         self.committer_email = committer_email
+        self.allow_push = allow_push
+
+    def _refuse_push_here(self, branch: str) -> None:
+        if not self.allow_push:
+            raise GitWorkspaceError(
+                f"refusing to push {branch!r}: pushing is disabled on this "
+                f"machine (APM_ALLOW_PUSH is not set)"
+            )
 
     # -- plumbing ----------------------------------------------------------
 
@@ -435,6 +444,7 @@ class GitWorkspace:
     def push(self, url: str, branch: str) -> GitResult:
         """Push HEAD to a NEW branch. There is no force option: an existing
         branch that HEAD does not descend from rejects the push."""
+        self._refuse_push_here(branch)
         return self._run(
             f"push {shlex.quote(url)} "
             f"{shlex.quote('HEAD')}:{shlex.quote('refs/heads/' + branch)}",
@@ -548,6 +558,7 @@ class GitWorkspace:
         """
         if not branch or not _looks_like_sha(sha):
             raise GitWorkspaceError(f"refusing to push {sha!r} to {branch!r}")
+        self._refuse_push_here(branch)
         return self._run(
             f"push -q {shlex.quote(url)} "
             f"{shlex.quote(sha + ':refs/heads/' + branch)}",

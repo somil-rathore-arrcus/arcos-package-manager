@@ -152,6 +152,28 @@ def test_cherry_pick_with_push_writes_the_branch_to_the_repository(world):
     assert "upstream/demo/pushed" in fx.git(bare, "branch", "--list", "upstream/*")
 
 
+def test_a_machine_that_may_not_push_refuses_before_applying_anything(world):
+    """APM_ALLOW_PUSH unset: a push is refused up front, a local apply is not."""
+    bare = world["root"] / "arcos-bare.git"
+    fx.git(world["root"], "clone", "-q", "--bare", str(world["arcos"]), str(bare))
+    service = PatchService(WorkspaceManager(
+        Transports(backend="local"), root=str(world["root"] / "workspaces"),
+        private_url_hint="file:///local", allow_push=False,
+    ))
+
+    with pytest.raises(PatchError) as raised:
+        service.cherry_pick(
+            _selection(world, [world["shas"]["D"]]), str(world["arcos"]),
+            branch_name="upstream/demo/refused", push=True, push_url=str(bare))
+
+    assert raised.value.code is ErrorCode.PUSH_DISABLED
+    assert fx.git(bare, "branch", "--list", "upstream/*") == ""
+    local = service.cherry_pick(
+        _selection(world, [world["shas"]["D"]]), str(world["arcos"]),
+        branch_name="upstream/demo/local", push=False)
+    assert local.pushed is False
+
+
 def test_conflicting_cherry_pick_pushes_nothing(world):
     fx.commit(world["arcos"], "shared.txt", "arcos version\n", "arcos edits shared")
     bare = world["root"] / "arcos-bare2.git"

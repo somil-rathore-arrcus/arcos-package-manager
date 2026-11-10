@@ -4,7 +4,7 @@ Two things happen here, and they are kept apart on purpose:
 
   generation   renders the file for every package from the SAME verified
                resolution the mapping and the dashboard use, writes it under
-               out/upstream-md/<package>/debian/upstream.md, and says what
+               out/upstream-md-<release>/<package>/debian/upstream.md, and says what
                committing it would do to what is already in the fork.
 
   planning     records the branch, base branch, commit message and diff that a

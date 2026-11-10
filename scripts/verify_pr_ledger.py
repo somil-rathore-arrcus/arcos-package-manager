@@ -12,6 +12,10 @@ Invariants that must hold whatever happened during the run:
     commit, links to GitHub's compare page for exactly its own repository,
     base and branch, and records no pull request - none was opened
   - every pushed entry names a full commit SHA
+  - every COVERED entry names the release whose branch covers it, that
+    branch's full commit, and pushed nothing and links nothing of its own
+  - no entry records a pull request this tool opened (PR_OPENED): it never
+    opens one
 
 It also reports how many of the plan's packages the ledger accounts for; a
 partial rollout (--limit, --package) is expected to leave some out.
@@ -89,6 +93,19 @@ def main(release: str) -> int:
                and not re.fullmatch(r"[0-9a-f]{40}", e.get("commit") or "")]
     check("every pushed entry names a full commit", not bad_sha,
           ", ".join(bad_sha))
+
+    covered = [e for e in entries if e["status"] == "COVERED"]
+    bad_cover = [
+        e["package"] for e in covered
+        if not e.get("covered_by") or e.get("pushed") or e.get("pr_create_url")
+        or not re.fullmatch(r"[0-9a-f]{40}", e.get("commit") or "")
+        or not metadata_branch(e.get("branch") or "")
+    ]
+    check("every covered package names its covering branch and pushed nothing",
+          not bad_cover, ", ".join(bad_cover))
+    opened_here = [e["package"] for e in entries if e["status"] == "PR_OPENED"]
+    check("no pull request was opened by this tool", not opened_here,
+          ", ".join(opened_here))
 
     packages = [e["package"] for e in entries]
     check("one entry per package", len(packages) == len(set(packages)))

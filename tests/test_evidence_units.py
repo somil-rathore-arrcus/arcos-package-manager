@@ -421,11 +421,13 @@ def test_doctor_reports_storage_without_needing_git(tmp_path, monkeypatch, capsy
     monkeypatch.setenv("APM_WORKSPACE_DIR", str(tmp_path / "ws"))
     monkeypatch.setenv("APM_GIT_BACKEND", "local")
     monkeypatch.delenv("APM_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("APM_ALLOW_PUSH", raising=False)
     doctor.run_doctor(check_manifest=False)
     out = capsys.readouterr().out
     assert f"PASS  output directory {tmp_path / 'out'} is writable" in out
     assert f"PASS  runtime package catalogue {tmp_path / 'out' / 'packages.yaml'}" in out
-    assert "WARN  APM_GITHUB_TOKEN is not set" in out
+    assert "PASS  APM_GITHUB_TOKEN is not set" in out
+    assert "WARN  APM_ALLOW_PUSH is not set" in out
 
 
 # -- manual upstream override -------------------------------------------------

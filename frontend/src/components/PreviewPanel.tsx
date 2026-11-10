@@ -1,6 +1,4 @@
-import type {
-  CherryPickPreview, CherryPickResult, PullRequest, ValidationReport,
-} from '../types/api'
+import type { CherryPickPreview, CherryPickResult, ValidationReport } from '../types/api'
 import { PublishStatusPanel } from './PublishStatusPanel'
 import { Card, ExternalLink } from './ui'
 
@@ -31,20 +29,19 @@ function Validation({ report }: { report: ValidationReport | null | undefined })
   )
 }
 
+// Pushes the patch branch and stops: the tool never opens the pull request. A
+// person opens it from the pre-filled link, and PublishStatusPanel reports one
+// once GitHub does.
 export function PreviewPanel({
-  preview, result, pullRequest, onCancel, onApply, applying, onCreatePr, creatingPr,
-  canCreatePr, readOnly,
+  preview, result, onCancel, onApply, applying, pushEnabled,
 }: {
   preview: CherryPickPreview
   result: CherryPickResult | null
-  pullRequest: PullRequest | null
   onCancel: () => void
   onApply: () => void
   applying: boolean
-  onCreatePr: () => void
-  creatingPr: boolean
-  canCreatePr: boolean
-  readOnly: boolean
+  /** The deployment allows pushing; without it the server refuses with PUSH_DISABLED. */
+  pushEnabled: boolean
 }) {
   const clean = preview.outcome === 'CLEAN'
   const pushed = result?.outcome === 'CLEAN' && result.pushed
@@ -154,25 +151,15 @@ export function PreviewPanel({
               {result.pushed ? ' — pushed.' : ' — not pushed.'}
             </p>
           )}
-          {pushed && result.pr_create_url && !pullRequest && (
+          {pushed && result.pr_create_url && (
             <p style={{ marginTop: 6 }}>
               <ExternalLink href={result.pr_create_url}>Open the pull request on GitHub</ExternalLink>
               <span className="small">
-                {canCreatePr
-                  ? ' — or create it here; if that fails, a person with access to the '
-                    + 'repository opens it from this pre-filled form.'
-                  : ' — no pull request was created; a person with access to the '
-                    + 'repository opens it from this pre-filled form.'}
+                {' — no pull request was created; a person with access to the '
+                  + 'repository opens it from this pre-filled form.'}
               </span>
             </p>
           )}
-        </div>
-      )}
-
-      {pullRequest?.url && (
-        <div className="alert info" style={{ marginTop: 14 }}>
-          <h3>{pullRequest.already_existed ? 'Pull request already open' : 'Pull request created'}</h3>
-          <p><ExternalLink href={pullRequest.url}>{pullRequest.url}</ExternalLink></p>
         </div>
       )}
 
@@ -180,28 +167,21 @@ export function PreviewPanel({
         <PublishStatusPanel pkg={result.package} branch={result.new_branch} base={result.base_branch} />
       )}
 
-      {readOnly && clean && !result && (
+      {!pushEnabled && clean && !result && (
         <div className="alert info" style={{ marginTop: 14 }}>
-          <h3>Read-only mode</h3>
+          <h3>Pushing is disabled</h3>
           <p>
-            No GitHub token is configured, so the tool cannot open a pull request.
-            It can still create the patch branch and push it over SSH; you then open
-            the pull request from a pre-filled GitHub link.
+            This deployment does not push branches, so the patch branch cannot be
+            created from here. The preview above is complete; nothing was written.
           </p>
         </div>
       )}
 
       <div className="actions" style={{ marginTop: 14 }}>
-        <button onClick={onCancel} disabled={applying || creatingPr}>Cancel</button>
-        {clean && !result && (
+        <button onClick={onCancel} disabled={applying}>Cancel</button>
+        {pushEnabled && clean && !result && (
           <button className="primary" onClick={onApply} disabled={applying}>
-            {applying ? 'Pushing…'
-              : readOnly ? 'Push patch branch (no PR)' : 'Create patch branch and push'}
-          </button>
-        )}
-        {pushed && canCreatePr && !pullRequest && (
-          <button className="primary" onClick={onCreatePr} disabled={creatingPr}>
-            {creatingPr ? 'Opening…' : 'Create pull request'}
+            {applying ? 'Pushing…' : 'Push patch branch (no PR)'}
           </button>
         )}
       </div>

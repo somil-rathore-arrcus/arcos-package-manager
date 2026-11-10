@@ -10,7 +10,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from urllib.parse import quote
+
+from pydantic import BaseModel, Field, computed_field
 
 from .enums import (
     CiState,
@@ -812,9 +814,40 @@ class PublishResult(BaseModel):
     pr_create_url: Optional[str] = Field(
         None,
         description="GitHub's pre-filled 'open a pull request' page for this "
-                    "branch. Set by push-only runs and their dry runs, which "
-                    "open no pull request themselves.",
+                    "branch. This tool never opens the pull request itself.",
+    )
+    covered_by: Optional[str] = Field(
+        None,
+        description="COVERED only: the release whose branch already proposes "
+                    "this exact file; branch and commit are that branch's.",
     )
     error: Optional[str] = None
     diff: Optional[str] = None
     updated_at: Optional[datetime] = None
+
+    @property
+    def _on_github(self) -> bool:
+        """Whether `branch` exists on the fork: this tool pushed it, or it is
+        another release's branch that covers this package."""
+        return bool(self.repository and self.branch and self.base_branch) and (
+            self.pushed or self.status is PublishStatus.COVERED)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def compare_url(self) -> Optional[str]:
+        """The branch against its target on GitHub - what a person opens the
+        pull request from. Derived, so a record can never carry a stale one."""
+        if not self._on_github:
+            return None
+        return (f"https://github.com/{self.repository}/compare/"
+                f"{quote(self.base_branch, safe='/')}..."
+                f"{quote(self.branch, safe='/')}")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def file_url(self) -> Optional[str]:
+        """debian/upstream.md as the branch holds it on GitHub."""
+        if not self._on_github:
+            return None
+        return (f"https://github.com/{self.repository}/blob/"
+                f"{quote(self.branch, safe='/')}/debian/upstream.md")

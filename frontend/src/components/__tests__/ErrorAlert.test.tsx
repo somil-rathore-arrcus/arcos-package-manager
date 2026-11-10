@@ -53,3 +53,22 @@ describe('the deployment API token', () => {
       .toBeInTheDocument()
   })
 })
+
+describe('deployment policy errors', () => {
+  it('names a refused push as the deployment\'s policy, not a failure code', () => {
+    render(<ErrorAlert error={new ApiError(
+      'This deployment does not push.', 'PUSH_DISABLED', 403)} />)
+    expect(screen.getByRole('heading', { name: 'Pushing is disabled on this deployment' }))
+      .toBeInTheDocument()
+    expect(screen.getByText(/previews and dry runs still work/i)).toBeInTheDocument()
+    expect(screen.queryByText('PUSH DISABLED')).toBeNull()
+  })
+
+  it('says the tool never opens pull requests, and where a person opens one', () => {
+    render(<ErrorAlert error={new ApiError(
+      'Pull requests are disabled.', 'PULL_REQUESTS_DISABLED', 403)} />)
+    expect(screen.getByRole('heading', { name: 'This tool never opens pull requests' }))
+      .toBeInTheDocument()
+    expect(screen.getByText(/opens the pull request from its Compare Link/)).toBeInTheDocument()
+  })
+})

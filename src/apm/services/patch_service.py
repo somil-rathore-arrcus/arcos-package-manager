@@ -400,6 +400,12 @@ class PatchService:
             raise PatchError(
                 ErrorCode.INVALID_REQUEST, "No commits were selected."
             )
+        if push and not getattr(self.workspaces, "allow_push", True):
+            raise PatchError(
+                ErrorCode.PUSH_DISABLED,
+                "Pushing is disabled on this machine (APM_ALLOW_PUSH is not "
+                "set); nothing was applied or pushed.",
+            )
 
         base_branch = base_ref or selection.arcos_branch
         new_branch = branch_name or self.branch_name(selection.package)

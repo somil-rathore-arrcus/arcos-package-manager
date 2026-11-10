@@ -42,6 +42,8 @@ STATUS = {
     ErrorCode.BASE_MOVED: 409,
     ErrorCode.API_TOKEN_REQUIRED: 401,
     ErrorCode.RATE_LIMITED: 429,
+    ErrorCode.PULL_REQUESTS_DISABLED: 403,
+    ErrorCode.PUSH_DISABLED: 403,
     ErrorCode.INTERNAL: 500,
 }
 

@@ -1,4 +1,4 @@
-"""Proposing debian/upstream.md: branch, commit, push, PR - and what must never happen.
+"""Proposing debian/upstream.md: branch, commit, push, link - and what must never happen.
 
 These drive real git: a bare repository stands in for the ARCoS fork, reached
 over file:// with partial clone enabled so the shallow, blobless path the
@@ -13,6 +13,7 @@ replaced, and a failure is recorded and survived.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import stat
@@ -31,7 +32,7 @@ from apm.domain.models import (
     UpstreamResolution,
 )
 from apm.gitio.transport import LocalGit
-from apm.gitio.workspace import GitWorkspace
+from apm.gitio.workspace import GitWorkspace, GitWorkspaceError
 from apm.services.github_service import GitHubError, build_upstream_md_pr_body
 from apm.services.publish_ledger import PublishLedger
 from apm.services.upstream_md_publisher import (
@@ -148,6 +149,7 @@ class FakeWorkspaces:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.pushes = []
+        self.allow_push = True
 
     def scratch(self, label):
         return RecordingWorkspace(self.pushes, LocalGit(timeout=60),
@@ -155,9 +157,12 @@ class FakeWorkspaces:
 
 
 class FakeGitHub:
-    def __init__(self, token="tok", fail_create=None, earlier=None):
+    """GitHub as the publisher may use it: lookups only. There is no method
+    that opens a pull request, so a publisher calling one would fail the test;
+    `created` stays empty and the assertions on it say so out loud."""
+
+    def __init__(self, token="tok", earlier=None):
         self.token = token
-        self.fail_create = fail_create
         self.earlier = earlier
         self.created = []
         self.lookups = []
@@ -165,7 +170,7 @@ class FakeGitHub:
         self._open = {}
 
     @property
-    def can_create_pull_requests(self):
+    def has_token(self):
         return bool(self.token)
 
     def get_repository(self, slug):
@@ -179,21 +184,6 @@ class FakeGitHub:
         if head in self._open:
             return self._open[head]
         return self.earlier
-
-    def create_pull_request(self, slug, head, base, title, body, draft=False):
-        if not self.token:
-            raise GitHubError(ErrorCode.AUTH_REQUIRED, "token required")
-        if head in self._open:
-            return self._open[head].model_copy(update={"already_existed": True})
-        if self.fail_create:
-            raise GitHubError(ErrorCode.INTERNAL, self.fail_create)
-        self.created.append({"slug": slug, "head": head, "base": base,
-                             "title": title, "body": body, "draft": draft})
-        pr = PullRequest(number=len(self.created), state="open", title=title,
-                         url=f"https://github.com/{slug}/pull/{len(self.created)}",
-                         base=base, head=head, draft=draft)
-        self._open[head] = pr
-        return pr
 
 
 @pytest.fixture
@@ -373,14 +363,14 @@ def test_dry_run_needs_no_token(env):
 
 # -- apply --------------------------------------------------------------------
 
-def test_apply_pushes_one_file_on_a_new_branch_and_opens_a_pr(env):
+def test_apply_pushes_one_file_on_a_new_branch_and_opens_no_pr(env):
     remote, github, publisher, target = env
     tip = remote.ref("aminor")
 
     result = publisher.publish(target, apply=True)
 
-    assert result.status is PublishStatus.PR_OPENED, result.error
-    assert result.pushed is True
+    assert result.status is PublishStatus.BRANCH_PUSHED, result.error
+    assert result.pushed is True and result.pull_request is None
     assert remote.ref("aminor") == tip, "the target branch must never move"
     assert remote.ref(BRANCH) == result.commit
     assert g.git(remote.bare, "rev-parse", f"{result.commit}^") == tip
@@ -392,52 +382,38 @@ def test_apply_pushes_one_file_on_a_new_branch_and_opens_a_pr(env):
                  result.commit) == \
         "Somil Rathore <somil.rathore@arrcus.com>|Somil Rathore <somil.rathore@arrcus.com>"
 
-    [pr] = github.created
-    assert pr["slug"] == "Arrcus/mstpd"
-    assert (pr["head"], pr["base"]) == (BRANCH, "aminor")
-    assert pr["title"] == result.title
-    assert _ci_description_check(pr["body"])
-    assert result.pull_request.url.endswith("/pull/1")
+    assert github.created == []
+    assert result.compare_url == \
+        f"https://github.com/Arrcus/mstpd/compare/aminor...{BRANCH}"
+    assert result.file_url == \
+        f"https://github.com/Arrcus/mstpd/blob/{BRANCH}/{PATH}"
+    query = _query(result.pr_create_url)
+    assert query["title"] == result.title
+    assert _ci_description_check(query["body"])
 
 
-def test_apply_without_a_token_refuses_before_any_push(env):
+@pytest.mark.parametrize("token", ["tok", ""])
+def test_asking_for_a_pull_request_is_refused_before_any_push(env, token):
     remote, github, publisher, target = env
-    github.token = ""
+    github.token = token
+
     with pytest.raises(PublishError) as raised:
-        publisher.publish(target, apply=True)
-    assert raised.value.code is ErrorCode.AUTH_REQUIRED
-    assert remote.branches() == ["aminor"]
+        publisher.publish(target, apply=True, push_only=False)
+
+    assert raised.value.code is ErrorCode.PULL_REQUESTS_DISABLED
+    assert remote.branches() == ["aminor"] and publisher.workspaces.pushes == []
+    assert github.created == []
 
 
-def test_rerunning_after_success_neither_pushes_nor_opens_again(env, tmp_path):
+def test_rerunning_after_success_neither_pushes_nor_opens_again(env):
     remote, github, publisher, target = env
     first = publisher.publish(target, apply=True)
-    pushed = remote.ref(BRANCH)
 
     second = publisher.publish(target, apply=True, prior=first)
 
-    assert second.status is PublishStatus.PR_EXISTS
-    assert remote.ref(BRANCH) == pushed
-    assert len(github.created) == 1
-
-
-def test_a_failed_pr_is_retried_without_pushing_again(tmp_path):
-    remote = Remote(tmp_path / "remote")
-    github = FakeGitHub(fail_create="Validation Failed")
-    publisher = _publisher_for(tmp_path, remote, github)
-    resolution = _resolution(remote=remote)
-    target = target_from_resolution(resolution, UpstreamMdService().render(resolution))
-
-    failed = publisher.publish(target, apply=True)
-    assert failed.status is PublishStatus.PR_FAILED
-    assert failed.pushed is True and remote.ref(BRANCH) == failed.commit
-    assert "Validation Failed" in failed.error
-
-    github.fail_create = None
-    retried = publisher.publish(target, apply=True, prior=failed)
-    assert retried.status is PublishStatus.PR_OPENED
-    assert retried.commit == failed.commit
-    assert len(github.created) == 1
+    assert second.status is PublishStatus.BRANCH_PUSHED
+    assert second.commit == first.commit == remote.ref(BRANCH)
+    assert len(publisher.workspaces.pushes) == 1 and github.created == []
 
 
 def test_a_rejected_push_is_recorded_and_opens_no_pr(env):
@@ -492,7 +468,7 @@ def test_an_older_generated_file_is_updated(tmp_path):
 
     result = publisher.publish(target, apply=True)
 
-    assert result.status is PublishStatus.PR_OPENED, result.error
+    assert result.status is PublishStatus.BRANCH_PUSHED, result.error
     assert result.outcome is UpstreamMdOutcome.UPDATED
     assert result.title.startswith("mstpd: update ")
 
@@ -525,15 +501,15 @@ def test_a_closed_pr_is_not_reopened(tmp_path):
 def test_a_closed_pr_is_not_reopened_when_resuming_a_pushed_branch(env):
     remote, github, publisher, target = env
     first = publisher.publish(target, apply=True)
-    # A reviewer closes it; the ledger still says PR_OPENED.
-    closed = first.pull_request.model_copy(update={"state": "closed"})
-    github._open.clear()
-    github.earlier = closed
+    # A person opened it from the link, and a reviewer closed it.
+    github.earlier = PullRequest(number=7, state="closed", head=BRANCH,
+                                 head_sha=first.commit,
+                                 url="https://github.com/Arrcus/mstpd/pull/7")
 
     again = publisher.publish(target, apply=True, prior=first)
 
     assert again.status is PublishStatus.PR_CLOSED
-    assert len(github.created) == 1
+    assert len(publisher.workspaces.pushes) == 1 and github.created == []
 
 
 def test_a_merged_pr_is_done_not_a_problem(tmp_path):
@@ -575,9 +551,12 @@ def test_unverified_and_excluded_packages_never_reach_git(env):
     assert remote.branches() == ["aminor"] and github.created == []
 
 
-def test_the_caller_cannot_name_the_target_branch(env):
+def test_the_caller_cannot_name_the_branch_at_all(env):
+    """The branch comes from settings.yaml and the records. publish takes no
+    name, so neither the CLI nor the API can pass one through."""
     remote, github, publisher, target = env
-    with pytest.raises(PublishError):
+    assert "branch" not in inspect.signature(UpstreamMdPublisher.publish).parameters
+    with pytest.raises(TypeError):
         publisher.publish(target, apply=True, branch="aminor")
     assert remote.branches() == ["aminor"]
 
@@ -660,11 +639,14 @@ def test_one_failure_does_not_stop_the_batch(tmp_path):
                                      confirm_count=3)
 
     assert [r.status for r in results] == [
-        PublishStatus.PR_OPENED, PublishStatus.PUSH_FAILED, PublishStatus.PR_OPENED,
+        PublishStatus.BRANCH_PUSHED, PublishStatus.PUSH_FAILED,
+        PublishStatus.BRANCH_PUSHED,
     ]
     assert ledger.get("bbb").status is PublishStatus.PUSH_FAILED
     reloaded = PublishLedger.for_release(tmp_path / "out", "bookworm")
-    assert reloaded.get("ccc").pull_request.url.endswith("/pull/2")
+    assert reloaded.get("ccc").compare_url.endswith(
+        "/compare/aminor...upstream-metadata/bookworm/ccc")
+    assert github.created == []
 
 
 def test_the_confirmation_must_match_what_would_be_pushed(tmp_path):
@@ -676,15 +658,37 @@ def test_the_confirmation_must_match_what_would_be_pushed(tmp_path):
     assert all(r.branches() == ["aminor"] for r, _ in pairs)
 
 
-def test_preflight_failure_stops_before_any_push(tmp_path):
+def test_a_machine_that_may_not_push_stops_before_any_push(tmp_path):
     pairs = _targets(tmp_path, ["aaa"])
-    target = pairs[0][1]
-    target.slug = "Arrcus/forbidden"
+    remote, target = pairs[0]
     publisher = _publisher_for(tmp_path, None)
-    with pytest.raises(PublishError) as raised:
-        publisher.publish_many([(target, None)], apply=True, confirm_count=1)
-    assert "SSO" in str(raised.value)
-    assert pairs[0][0].branches() == ["aminor"]
+    publisher.workspaces.allow_push = False
+
+    for attempt in (
+        lambda: publisher.publish_many([(target, None)], apply=True, confirm_count=1),
+        lambda: publisher.publish(target, apply=True),
+    ):
+        with pytest.raises(PublishError) as raised:
+            attempt()
+        assert raised.value.code is ErrorCode.PUSH_DISABLED
+    assert remote.branches() == ["aminor"] and publisher.workspaces.pushes == []
+    # Reading and building are unaffected: a dry run still answers.
+    assert publisher.publish(target, apply=False).status is PublishStatus.DRY_RUN_OK
+
+
+def test_a_workspace_that_may_not_push_refuses_before_git_runs(tmp_path):
+    remote = Remote(tmp_path / "remote")
+    ws = GitWorkspace(LocalGit(), str(tmp_path / "ws"), allow_push=False)
+    ws.ensure()
+    head = ws.fetch_side("arcos", remote.url, "aminor", depth=1)
+    commit = ws.commit_file_on(head, PATH, "x\n", "m", "a", "a@b")
+
+    for push in (lambda: ws.push_commit(remote.url, commit, BRANCH),
+                 lambda: ws.push(remote.url, BRANCH)):
+        with pytest.raises(GitWorkspaceError) as raised:
+            push()
+        assert "APM_ALLOW_PUSH" in str(raised.value)
+    assert remote.branches() == ["aminor"]
 
 
 def test_consecutive_failures_stop_the_run(tmp_path):
@@ -745,7 +749,7 @@ def _plan(tmp_path, entries, skipped=()):
     for entry in entries:
         content = entry.pop("_content", None)
         if content is not None:
-            path = tmp_path / "upstream-md" / entry["package"] / "debian" / "upstream.md"
+            path = tmp_path / "upstream-md-bookworm" / entry["package"] / "debian" / "upstream.md"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
     plan = tmp_path / "upstream-md-plan-bookworm.json"
@@ -805,6 +809,35 @@ def test_the_plan_decides_eligibility_and_catches_drift(tmp_path):
     }
 
 
+def test_each_release_is_published_from_its_own_reviewed_folder(tmp_path):
+    """Regenerating one release never replaces the files another release's
+    plan was reviewed on: bookworm and trixie keep separate folders."""
+    from apm.services.upstream_md_service import review_dir
+
+    service = UpstreamMdService()
+    rows = {"bookworm": _resolution(),
+            "trixie": _resolution(debian_release="trixie", upstream_branch="main",
+                                  upstream_ref="main")}
+    for release, resolution in rows.items():
+        content = service.render(resolution)
+        path = review_dir(tmp_path, release) / "mstpd" / "debian" / "upstream.md"
+        path.parent.mkdir(parents=True)
+        path.write_text(content)
+        (tmp_path / f"upstream-md-plan-{release}.json").write_text(json.dumps({
+            "release": release, "entries": [{
+                "package": "mstpd", "status": "VERIFIED",
+                "arcos_repository": "Arrcus/mstpd", "base_branch": "aminor",
+                "sha256": sha256_text(content)}]}))
+
+    for release, resolution in rows.items():
+        [target], settled = load_targets(
+            tmp_path / f"upstream-md-plan-{release}.json",
+            FakeMapping({"mstpd": resolution}), service)
+        assert settled == []
+        assert target.content == service.render(resolution)
+    assert review_dir(tmp_path, "trixie") == tmp_path / "upstream-md-trixie"
+
+
 REAL_OUT = Path(__file__).resolve().parents[1] / "out"
 
 
@@ -814,6 +847,7 @@ def _real_mapping_has_levels() -> bool:
 
 @pytest.mark.skipif(
     not (REAL_OUT / "upstream-md-plan-bookworm.json").exists()
+    or not (REAL_OUT / "upstream-md-bookworm").is_dir()
     or not _real_mapping_has_levels(),
     reason="needs a bookworm mapping and plan generated with verification levels",
 )
@@ -825,7 +859,7 @@ def test_the_real_bookworm_plan_only_proposes_proven_packages(tmp_path):
     plan = json.loads((REAL_OUT / "upstream-md-plan-bookworm.json").read_text())
     copy = tmp_path / "upstream-md-plan-bookworm.json"
     copy.write_text(json.dumps(plan))
-    os.symlink(REAL_OUT / "upstream-md", tmp_path / "upstream-md")
+    os.symlink(REAL_OUT / "upstream-md-bookworm", tmp_path / "upstream-md-bookworm")
 
     from apm.services.comparison_store import ComparisonStore
 
@@ -865,8 +899,8 @@ def test_the_curated_upstream_conflicts_stay_excluded_until_decided():
         assert resolution.status is ResolutionStatus.VERIFIED
         target = target_from_resolution(
             resolution, UpstreamMdService().render(resolution))
-        for push_only in (False, True):
-            result = publisher.publish(target, apply=True, push_only=push_only)
+        for apply in (False, True):
+            result = publisher.publish(target, apply=apply)
             assert result.status is PublishStatus.SKIPPED_EXCLUDED
             assert result.error == exclude[package]
 
@@ -902,7 +936,7 @@ def test_a_resolution_that_only_proves_existence_is_never_proposed(tmp_path):
 def test_the_plan_refuses_a_mapping_without_verification_levels(tmp_path):
     resolution = _resolution(verification_level=VerificationLevel.NONE)
     content = UpstreamMdService().render(resolution)
-    md = tmp_path / "upstream-md" / "mstpd" / "debian" / "upstream.md"
+    md = tmp_path / "upstream-md-bookworm" / "mstpd" / "debian" / "upstream.md"
     md.parent.mkdir(parents=True)
     md.write_text(content)
     plan = tmp_path / "upstream-md-plan-bookworm.json"
@@ -970,9 +1004,14 @@ def test_push_only_dry_run_pushes_nothing_and_shows_the_link(env):
     assert github.created == []
 
 
-def test_a_plain_dry_run_gives_no_link(env):
+def test_every_dry_run_shows_the_link_its_push_would_give(env):
     remote, github, publisher, target = env
-    assert publisher.publish(target, apply=False).pr_create_url is None
+
+    result = publisher.publish(target, apply=False)
+
+    assert f"/compare/aminor...{BRANCH}?quick_pull=1" in result.pr_create_url
+    # Nothing is on GitHub yet, so there is no Compare Link or file to open.
+    assert result.compare_url is None and result.file_url is None
 
 
 def test_rerunning_push_only_after_the_push_does_not_push_again(env):
@@ -989,21 +1028,18 @@ def test_rerunning_push_only_after_the_push_does_not_push_again(env):
     assert remote.ref(BRANCH) == first.commit and github.created == []
 
 
-def test_a_token_run_after_push_only_opens_the_pr_without_pushing_again(env):
+def test_a_token_never_turns_a_pushed_branch_into_a_pull_request(env):
     remote, github, publisher, target = env
     github.token = ""
-    pushed = publisher.publish(target, apply=True, push_only=True)
+    pushed = publisher.publish(target, apply=True)
 
     github.token = "tok"
-    opened = publisher.publish(target, apply=True, prior=pushed)
+    again = publisher.publish(target, apply=True, prior=pushed)
 
-    assert opened.status is PublishStatus.PR_OPENED, opened.error
-    assert opened.commit == pushed.commit
-    assert len(publisher.workspaces.pushes) == 1
-    [pr] = github.created
-    assert (pr["head"], pr["base"], pr["title"]) == (BRANCH, "aminor", pushed.title)
-    # The tool opens the same description the link would have filled in.
-    assert pr["body"] == _query(pushed.pr_create_url)["body"]
+    assert again.status is PublishStatus.BRANCH_PUSHED, again.error
+    assert again.commit == pushed.commit
+    assert again.pr_create_url == pushed.pr_create_url
+    assert len(publisher.workspaces.pushes) == 1 and github.created == []
 
 
 def test_a_pr_a_person_opened_from_the_link_is_found_not_duplicated(env):
@@ -1076,19 +1112,21 @@ def test_push_only_stops_for_the_same_reasons_as_any_apply(tmp_path):
     assert taken.ref(BRANCH) == foreign
 
 
-def test_push_only_preflight_needs_neither_a_token_nor_the_api(tmp_path):
+def test_preflight_needs_neither_a_token_nor_the_api_and_refuses_a_pull_request(
+        tmp_path):
     github = FakeGitHub(token="")
     publisher = _publisher_for(tmp_path, None, github)
 
-    publisher.preflight(["Arrcus/mstpd", "Arrcus/forbidden"], push_only=True)
+    publisher.preflight()
 
-    assert github.repos == []
+    assert github.repos == [] and github.lookups == []
+    github.token = "tok"
     with pytest.raises(PublishError) as raised:
-        publisher.preflight(["Arrcus/mstpd"])
-    assert raised.value.code is ErrorCode.AUTH_REQUIRED
+        publisher.preflight(push_only=False)
+    assert raised.value.code is ErrorCode.PULL_REQUESTS_DISABLED
 
 
-def test_a_batch_without_a_token_refuses_unless_push_only(tmp_path):
+def test_a_batch_pushes_without_a_token_and_never_opens_a_pull_request(tmp_path):
     pairs = _targets(tmp_path, ["aaa", "bbb"])
     github = FakeGitHub(token="")
     publisher = _publisher_for(tmp_path, None, github)
@@ -1096,14 +1134,14 @@ def test_a_batch_without_a_token_refuses_unless_push_only(tmp_path):
     queue, _ = publisher.select([t for _, t in pairs], ledger)
 
     with pytest.raises(PublishError) as raised:
-        publisher.publish_many(queue, apply=True, ledger=ledger, confirm_count=2)
-    assert raised.value.code is ErrorCode.AUTH_REQUIRED
-    assert "Nothing was pushed" in str(raised.value)
+        publisher.publish_many(queue, apply=True, ledger=ledger, confirm_count=2,
+                               push_only=False)
+    assert raised.value.code is ErrorCode.PULL_REQUESTS_DISABLED
     assert publisher.workspaces.pushes == []
     assert all(r.branches() == ["aminor"] for r, _ in pairs)
 
     results = publisher.publish_many(queue, apply=True, ledger=ledger,
-                                     confirm_count=2, push_only=True)
+                                     confirm_count=2)
 
     assert [r.status for r in results] == [PublishStatus.BRANCH_PUSHED] * 2
     assert [b for _, b in publisher.workspaces.pushes] == [
@@ -1113,13 +1151,12 @@ def test_a_batch_without_a_token_refuses_unless_push_only(tmp_path):
     reloaded = PublishLedger.for_release(tmp_path / "out", "bookworm")
     assert reloaded.get("bbb").pr_create_url == results[1].pr_create_url
 
-    # Not done, so the next run picks them up again; not failed, so a retry
-    # of failures leaves them alone.
-    queue, kept = publisher.select([t for _, t in pairs], reloaded)
-    assert [t.package for t, _ in queue] == ["aaa", "bbb"] and kept == []
-    queue, kept = publisher.select([t for _, t in pairs], reloaded,
-                                   retry_failed=True)
-    assert queue == [] and len(kept) == 2
+    # Nothing more to do for them: the next run keeps them, and so does a
+    # retry of failures.
+    for retry_failed in (False, True):
+        queue, kept = publisher.select([t for _, t in pairs], reloaded,
+                                       retry_failed=retry_failed)
+        assert queue == [] and len(kept) == 2
 
 
 def test_push_only_needs_the_same_confirmation(tmp_path):
@@ -1167,12 +1204,12 @@ def test_a_pushed_only_branch_survives_an_upstream_move(tmp_path):
                                               "master"))
     assert UpstreamMdService().render(moved) == content
     again = target_from_resolution(moved, content)
-    [opened] = publisher.publish_many([(again, ledger.get("mstpd"))], apply=True,
+    [linked] = publisher.publish_many([(again, ledger.get("mstpd"))], apply=True,
                                       ledger=ledger, confirm_count=1)
 
-    assert opened.status is PublishStatus.PR_OPENED, opened.error
-    assert opened.commit == pushed.commit
-    assert len(publisher.workspaces.pushes) == 1 and len(github.created) == 1
+    assert linked.status is PublishStatus.BRANCH_PUSHED, linked.error
+    assert linked.commit == pushed.commit
+    assert len(publisher.workspaces.pushes) == 1 and github.created == []
 
 
 def test_a_failure_after_the_push_does_not_erase_the_branch_record(env, tmp_path):
@@ -1217,46 +1254,47 @@ def test_a_pushed_branch_holding_an_older_file_is_drift_not_a_pr(env, tmp_path):
     assert record.status is PublishStatus.DRIFT
     assert (record.commit, record.pushed) == (pushed.commit, True)
 
-    # Until the branch is deleted, every run - push-only or not - stops there.
-    for push_only in (False, True):
+    # Until the branch is deleted, every run stops there.
+    for _ in range(2):
         [again] = publisher.publish_many([(changed, ledger.get("mstpd"))],
                                          apply=True, ledger=ledger,
-                                         confirm_count=1, push_only=push_only)
+                                         confirm_count=1)
         assert again.status is PublishStatus.DRIFT, again.error
         assert again.pr_create_url is None
     assert github.created == [] and len(publisher.workspaces.pushes) == 1
 
     # Deleted on the fork, it is pushed again with the reviewed file.
     g.git(remote.bare, "update-ref", "-d", f"refs/heads/{BRANCH}")
-    [opened] = publisher.publish_many([(changed, ledger.get("mstpd"))],
-                                      apply=True, ledger=ledger, confirm_count=1)
-    assert opened.status is PublishStatus.PR_OPENED, opened.error
-    assert opened.commit != pushed.commit
-    assert g.git(remote.bare, "show", f"{opened.commit}:{PATH}") + "\n" == \
+    [repushed] = publisher.publish_many([(changed, ledger.get("mstpd"))],
+                                        apply=True, ledger=ledger, confirm_count=1)
+    assert repushed.status is PublishStatus.BRANCH_PUSHED, repushed.error
+    assert repushed.commit != pushed.commit
+    assert g.git(remote.bare, "show", f"{repushed.commit}:{PATH}") + "\n" == \
         changed.content
 
 
 @pytest.mark.parametrize("token", ["tok", ""])
-def test_push_only_never_downgrades_a_pull_request(env, tmp_path, token):
+def test_a_recorded_pull_request_is_never_downgraded(env, tmp_path, token):
     remote, github, publisher, target = env
-    ledger = PublishLedger.for_release(tmp_path / "out", "bookworm")
-    [opened] = publisher.publish_many([(target, None)], apply=True, ledger=ledger,
-                                      confirm_count=1)
-    assert opened.status is PublishStatus.PR_OPENED
     github.token = token
+    ledger = PublishLedger.for_release(tmp_path / "out", "bookworm")
+    [pushed] = publisher.publish_many([(target, None)], apply=True, ledger=ledger,
+                                      confirm_count=1)
+    # A person opened it from the link, and a later run found it.
+    ledger.record(pushed.model_copy(update={
+        "status": PublishStatus.PR_EXISTS, "pull_request": PullRequest(
+            number=12, state="open", url="https://github.com/Arrcus/mstpd/pull/12"),
+    }))
 
     # --recheck, or the API: the PR is open and the branch still there.
     [again] = publisher.publish_many([(target, ledger.get("mstpd"))], apply=True,
-                                     ledger=ledger, confirm_count=1,
-                                     push_only=True)
+                                     ledger=ledger, confirm_count=1)
 
-    assert again.status is PublishStatus.PR_OPENED
-    assert again.pull_request.url == opened.pull_request.url
-    assert again.pr_create_url is None
+    assert again.status is PublishStatus.PR_EXISTS
+    assert again.pull_request.url.endswith("/pull/12")
     record = PublishLedger.for_release(tmp_path / "out", "bookworm").get("mstpd")
-    assert record.status is PublishStatus.PR_OPENED
-    assert record.pull_request.url == opened.pull_request.url
-    assert len(publisher.workspaces.pushes) == 1 and len(github.created) == 1
+    assert record.status is PublishStatus.PR_EXISTS
+    assert len(publisher.workspaces.pushes) == 1 and github.created == []
 
 
 @pytest.mark.parametrize("status", [PublishStatus.PR_MERGED,
@@ -1344,32 +1382,30 @@ def test_a_run_that_never_meets_push_only_behaves_as_before(tmp_path):
         assert github.lookups == [] and publisher.workspaces.pushes == []
 
 
-def test_push_only_selection_keeps_what_it_can_do_nothing_more_for(tmp_path):
+def test_selection_keeps_what_it_can_do_nothing_more_for(tmp_path):
     publisher = UpstreamMdPublisher(None, FakeGitHub(), "a", "a@b")
-    names = ["done", "pushed", "closed", "failed", "new"]
+    names = ["done", "pushed", "covered", "closed", "failed", "new"]
     targets = [PublishTarget(n, "bookworm", ResolutionStatus.VERIFIED, "u",
                              f"Arrcus/{n}", "aminor", "x\n") for n in names]
     ledger = PublishLedger.for_release(tmp_path, "bookworm")
     for name, status in [("done", PublishStatus.PR_OPENED),
                          ("pushed", PublishStatus.BRANCH_PUSHED),
+                         ("covered", PublishStatus.COVERED),
                          ("closed", PublishStatus.PR_CLOSED),
                          ("failed", PublishStatus.PR_FAILED)]:
         ledger.record(PublishResult(package=name, release="bookworm",
                                     status=status))
 
-    queue, kept = publisher.select(targets, ledger, push_only=True)
+    queue, kept = publisher.select(targets, ledger)
     assert sorted(t.package for t, _ in queue) == ["failed", "new"]
-    assert sorted(k.package for k in kept) == ["closed", "done", "pushed"]
+    assert sorted(k.package for k in kept) == ["closed", "covered", "done",
+                                               "pushed"]
 
     # --limit therefore moves on instead of taking the same packages again.
-    queue, _ = publisher.select(targets, ledger, push_only=True, limit=1)
+    queue, _ = publisher.select(targets, ledger, limit=1)
     assert [t.package for t, _ in queue] == ["failed"]
 
-    # A token run queues the pushed branch, to open its pull request.
-    queue, _ = publisher.select(targets, ledger)
-    assert sorted(t.package for t, _ in queue) == ["closed", "failed", "new",
-                                                   "pushed"]
-    queue, _ = publisher.select(targets, ledger, push_only=True, recheck=True)
+    queue, _ = publisher.select(targets, ledger, recheck=True)
     assert len(queue) == len(names)
 
 
@@ -1491,12 +1527,12 @@ def test_a_branch_pushed_under_the_old_name_keeps_it_after_a_switch(env, tmp_pat
     assert switched.workspaces.pushes == []
 
     github.token = "tok"
-    opened = switched.publish(target, apply=True, prior=old)
+    linked = switched.publish(target, apply=True, prior=old)
 
-    assert opened.status is PublishStatus.PR_OPENED, opened.error
-    assert [pr["head"] for pr in github.created] == [BRANCH]
+    assert linked.status is PublishStatus.BRANCH_PUSHED, linked.error
+    assert linked.compare_url.endswith(f"/compare/aminor...{BRANCH}")
     assert remote.branches() == ["aminor", BRANCH]
-    assert switched.workspaces.pushes == []
+    assert switched.workspaces.pushes == [] and github.created == []
 
 
 def test_a_package_never_pushed_takes_the_new_name(env, tmp_path):
@@ -1511,15 +1547,23 @@ def test_a_package_never_pushed_takes_the_new_name(env, tmp_path):
 def test_a_second_release_never_takes_over_the_shared_branch(tmp_path):
     remote = Remote(tmp_path / "remote")
     publisher = _tracking_publisher(tmp_path, FakeGitHub(token=""))
-    bookworm = publisher.publish(_target(remote), apply=True, push_only=True)
-    trixie = _target(remote, debian_release="trixie")
+    bookworm = publisher.publish(_target(remote), apply=True)
+    same = _target(remote, debian_release="trixie")
+    g.git(remote.upstream_bare, "branch", "main", "master")
+    other = _target(remote, debian_release="trixie", upstream_branch="main",
+                    upstream_ref="main")
 
     for apply in (False, True):
-        result = publisher.publish(trixie, apply=apply, push_only=True,
-                                   others=[bookworm])
-        assert result.status is PublishStatus.BRANCH_EXISTS
-        assert "mstpd (bookworm)" in result.error
-    stranger = publisher.publish(trixie, apply=True, push_only=True)
+        # The same file: bookworm's branch already proposes it.
+        covered = publisher.publish(same, apply=apply, others=[bookworm])
+        assert covered.status is PublishStatus.COVERED, covered.error
+        assert (covered.branch, covered.covered_by) == (TRACKING_BRANCH, "bookworm")
+        # Another file: one proposal at a time, and this one is bookworm's.
+        refused = publisher.publish(other, apply=apply, others=[bookworm])
+        assert refused.status is PublishStatus.BRANCH_EXISTS
+        assert "bookworm's proposal for aminor" in refused.error
+        assert "holds a different debian/upstream.md" in refused.error
+    stranger = publisher.publish(same, apply=True)
     assert "no record of creating it" in stranger.error
 
     assert remote.ref(TRACKING_BRANCH) == bookworm.commit
@@ -1558,7 +1602,7 @@ def test_another_proposals_pr_under_the_shared_name_decides_nothing(tmp_path):
 
     result = publisher.publish(_target(remote), apply=True)
 
-    assert result.status is PublishStatus.PR_OPENED, result.error
+    assert result.status is PublishStatus.BRANCH_PUSHED, result.error
     assert remote.ref(TRACKING_BRANCH) == result.commit
 
 
@@ -1579,13 +1623,162 @@ def test_this_packages_pr_under_the_shared_name_still_counts(tmp_path):
     assert github.created == [] and len(publisher.workspaces.pushes) == 1
 
 
-def test_a_pull_request_that_could_not_be_opened_keeps_the_link(env):
-    remote, github, publisher, target = env
-    github.fail_create = "Validation Failed"
+# -- one target branch, one proposal: another release's branch covers --------
 
-    result = publisher.publish(target, apply=True)
+TRIXIE_BRANCH = "debian-upstream-tracking-trixie"
 
-    assert result.status is PublishStatus.PR_FAILED
-    assert remote.ref(BRANCH) == result.commit
-    assert result.pr_create_url.startswith(
-        f"https://github.com/Arrcus/mstpd/compare/aminor...{BRANCH}")
+
+def _release_publisher(tmp_path, github=None):
+    """As shipped: one tracking branch, and trixie's own beside it."""
+    return UpstreamMdPublisher(
+        FakeWorkspaces(tmp_path / "ws-releases"), github or FakeGitHub(token=""),
+        author_name="a", author_email="a@b", branch_template=TRACKING_BRANCH,
+        release_templates={"trixie": TRIXIE_BRANCH},
+    )
+
+
+def test_a_package_another_release_already_proposes_is_covered_not_pushed(tmp_path):
+    """trixie builds this package from aminor too, with the same file: the
+    bookworm branch serves both, and no second branch is pushed beside it."""
+    remote = Remote(tmp_path / "remote")
+    publisher = _release_publisher(tmp_path)
+    bookworm = publisher.publish(_target(remote), apply=True)
+    trixie = _target(remote, debian_release="trixie")
+    assert trixie.base_branch == "aminor" and trixie.content == _target(remote).content
+
+    for apply in (False, True):
+        result = publisher.publish(trixie, apply=apply, others=[bookworm])
+
+        assert result.status is PublishStatus.COVERED, result.error
+        assert (result.covered_by, result.branch, result.commit) == \
+            ("bookworm", TRACKING_BRANCH, bookworm.commit)
+        assert result.pushed is False and result.pr_create_url is None
+        assert result.compare_url == bookworm.compare_url
+        assert result.file_url == bookworm.file_url
+    assert remote.branches() == ["aminor", TRACKING_BRANCH]
+    assert len(publisher.workspaces.pushes) == 1
+
+
+def test_a_different_file_for_the_same_target_is_refused_not_pushed(tmp_path):
+    remote = Remote(tmp_path / "remote")
+    publisher = _release_publisher(tmp_path)
+    bookworm = publisher.publish(_target(remote), apply=True)
+    g.git(remote.upstream_bare, "branch", "main", "master")
+    trixie = _target(remote, debian_release="trixie", upstream_branch="main",
+                     upstream_ref="main")
+    assert trixie.content != _target(remote).content
+
+    for apply in (False, True):
+        result = publisher.publish(trixie, apply=apply, others=[bookworm])
+        assert result.status is PublishStatus.BRANCH_EXISTS
+        assert "holds a different debian/upstream.md" in result.error
+    assert remote.branches() == ["aminor", TRACKING_BRANCH]
+    assert len(publisher.workspaces.pushes) == 1
+
+
+def test_a_covering_branch_that_is_gone_is_for_a_person(tmp_path):
+    remote = Remote(tmp_path / "remote")
+    publisher = _release_publisher(tmp_path)
+    bookworm = publisher.publish(_target(remote), apply=True)
+    g.git(remote.bare, "update-ref", "-d", f"refs/heads/{TRACKING_BRANCH}")
+
+    result = publisher.publish(_target(remote, debian_release="trixie"),
+                               apply=True, others=[bookworm])
+
+    assert result.status is PublishStatus.BRANCH_EXISTS
+    assert "is gone" in result.error
+    assert remote.branches() == ["aminor"]
+
+
+def test_a_closed_covering_proposal_is_not_proposed_again(tmp_path):
+    remote = Remote(tmp_path / "remote")
+    publisher = _release_publisher(tmp_path)
+    bookworm = publisher.publish(_target(remote), apply=True)
+    closed = bookworm.model_copy(update={
+        "status": PublishStatus.PR_CLOSED, "pull_request": PullRequest(
+            number=3, state="closed", url="https://github.com/Arrcus/mstpd/pull/3"),
+    })
+
+    result = publisher.publish(_target(remote, debian_release="trixie"),
+                               apply=True, others=[closed])
+
+    assert result.status is PublishStatus.BRANCH_EXISTS
+    assert "closed without merging" in result.error
+    assert len(publisher.workspaces.pushes) == 1
+
+
+def test_only_the_same_repository_and_target_branch_cover(tmp_path):
+    remote = Remote(tmp_path / "remote")
+    publisher = _release_publisher(tmp_path)
+    bookworm = publisher.publish(_target(remote), apply=True)
+    own_target = _target(remote, debian_release="trixie", arcos_branch="aminor-trixie")
+    other_repo = _target(remote, debian_release="trixie",
+                         github_repository="Arrcus/other")
+    same = _target(remote, debian_release="trixie")
+
+    assert publisher.covering_record(same, None, [bookworm]) == bookworm
+    assert publisher.covering_record(own_target, None, [bookworm]) is None
+    assert publisher.covering_record(other_repo, None, [bookworm]) is None
+    # A release never covers itself, and a package with its own branch keeps it.
+    assert publisher.covering_record(_target(remote), None, [bookworm]) is None
+    own = PublishResult(package="mstpd", release="trixie", status=PublishStatus.BRANCH_PUSHED,
+                        branch=TRIXIE_BRANCH, commit="b" * 40, pushed=True)
+    assert publisher.covering_record(same, own, [bookworm]) is None
+    merged = bookworm.model_copy(update={"status": PublishStatus.PR_MERGED})
+    assert publisher.covering_record(same, None, [merged]) is None
+
+
+def test_covered_packages_are_not_counted_as_pushes_and_are_kept(tmp_path):
+    remote = Remote(tmp_path / "remote")
+    publisher = _release_publisher(tmp_path)
+    out = tmp_path / "out"
+    bookworm_ledger = PublishLedger.for_release(out, "bookworm")
+    [bookworm] = publisher.publish_many([(_target(remote), None)], apply=True,
+                                        ledger=bookworm_ledger, confirm_count=1)
+    trixie = _target(remote, debian_release="trixie")
+    ledger = PublishLedger.for_release(out, "trixie")
+    queue, _ = publisher.select([trixie], ledger)
+    assert publisher.would_push(queue, [bookworm]) == []
+
+    with pytest.raises(PublishError):
+        publisher.publish_many(queue, apply=True, ledger=ledger, confirm_count=1,
+                               others=[bookworm])
+    [covered] = publisher.publish_many(queue, apply=True, ledger=ledger,
+                                       confirm_count=0, others=[bookworm])
+
+    assert covered.status is PublishStatus.COVERED
+    assert PublishLedger.for_release(out, "trixie").get("mstpd").covered_by == "bookworm"
+    assert publisher.select([trixie], PublishLedger.for_release(out, "trixie"))[0] == []
+    assert len(publisher.workspaces.pushes) == 1
+    assert remote.branches() == ["aminor", TRACKING_BRANCH]
+
+
+def test_a_covered_record_never_claims_the_branch_it_points_at(tmp_path):
+    """bookworm resuming its own branch is not told trixie owns it."""
+    remote = Remote(tmp_path / "remote")
+    publisher = _release_publisher(tmp_path)
+    bookworm = publisher.publish(_target(remote), apply=True)
+    covered = publisher.publish(_target(remote, debian_release="trixie"),
+                                apply=True, others=[bookworm])
+    assert covered.status is PublishStatus.COVERED
+
+    again = publisher.publish(_target(remote), apply=True, prior=bookworm,
+                              others=[covered])
+
+    assert again.status is PublishStatus.BRANCH_PUSHED, again.error
+    assert again.commit == bookworm.commit
+    assert len(publisher.workspaces.pushes) == 1
+
+
+def test_links_exist_only_for_a_branch_that_is_on_github():
+    common = dict(package="mstpd", release="bookworm", repository="Arrcus/mstpd",
+                  base_branch="aminor", branch=BRANCH, commit="c" * 40)
+    pushed = PublishResult(status=PublishStatus.BRANCH_PUSHED, pushed=True, **common)
+    assert pushed.compare_url == \
+        f"https://github.com/Arrcus/mstpd/compare/aminor...{BRANCH}"
+    assert pushed.file_url == f"https://github.com/Arrcus/mstpd/blob/{BRANCH}/{PATH}"
+    assert PublishResult(status=PublishStatus.DRY_RUN_OK, **common).compare_url is None
+    assert PublishResult(status=PublishStatus.COVERED, **common).file_url == pushed.file_url
+    # Derived, never stored stale: a record read back recomputes them.
+    again = PublishResult.model_validate(pushed.model_dump(mode="json"))
+    assert again.compare_url == pushed.compare_url

@@ -1,7 +1,8 @@
-"""Preview, cherry-pick and pull requests.
+"""Preview and cherry-pick, and the link a pull request is opened from.
 
 Nothing in this module happens implicitly. Preview never writes, cherry-pick only
-pushes when asked, and a pull request is a separate call again.
+pushes when asked, and a pull request is never opened here: a person opens it
+from the pushed branch's link.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from ...services.github_service import (
 from ...services.patch_service import PatchError
 from ...domain.enums import ErrorCode, PreviewOutcome, ResolutionStatus
 from ..deps import container, require_write_access
-from ..schemas import CherryPickRequest, PatchRequest, PullRequestRequest
+from ..schemas import CherryPickRequest, PatchRequest
 
 router = APIRouter(tags=["patches"])
 
@@ -111,35 +112,15 @@ def _describe_pull_request(app, request: CherryPickRequest,
         )
 
 
-@router.post("/pull-requests", response_model=PullRequest)
-def create_pull_request(request: PullRequestRequest, http: Request,
-                        app=Depends(container)):
-    require_write_access(http, app)
-    resolution = app.upstream.resolve(
-        request.package, request.release, request.arcos_branch
-    )
-    slug = repo_slug(resolution.arcos_repository)
-    if not slug:
-        raise GitHubError(
-            ErrorCode.INVALID_REQUEST,
-            f"{resolution.arcos_repository} is not a GitHub repository, so a "
-            f"pull request cannot be opened for it.",
-        )
-
-    from ...domain.models import CherryPickResult as Result
-    from ...domain.enums import PreviewOutcome
-
-    result = Result(
-        outcome=PreviewOutcome.CLEAN, package=request.package,
-        base_branch=request.arcos_branch, new_branch=request.head_branch,
-        applied=request.applied, pushed=True,
-    )
-    title = request.title or patch_pr_title(
-        request.package, request.arcos_branch, len(request.applied))
-    body = request.body or build_patch_pr_body(resolution, result)
-    return app.github.create_pull_request(
-        slug, request.head_branch, request.arcos_branch, title, body,
-        draft=request.draft,
+@router.post("/pull-requests")
+def create_pull_request():
+    """Refused, always: this application never opens a pull request. A pushed
+    branch comes back with its link (pr_create_url), and a person opens the
+    pull request from there."""
+    raise GitHubError(
+        ErrorCode.PULL_REQUESTS_DISABLED,
+        "This application never opens a pull request. Open it on GitHub from "
+        "the branch's link instead.",
     )
 
 

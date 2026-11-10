@@ -277,6 +277,9 @@ describe('patch workflow', () => {
     return recorded
   }
 
+  const pushPatch = () =>
+    user.click(screen.getByRole('button', { name: /push patch branch \(no pr\)/i }))
+
   it('previews cleanly and says the target branch was untouched', async () => {
     await selectAndPreview()
     expect(screen.getByText(/applies cleanly/i)).toBeInTheDocument()
@@ -287,20 +290,24 @@ describe('patch workflow', () => {
     await selectAndPreview({ preview: fx.conflictPreview })
     expect(screen.getByText('Conflict')).toBeInTheDocument()
     expect(screen.getByText(/never resolved automatically/i)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /create patch branch/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /push patch branch/i })).toBeNull()
   })
 
-  it('creates a patch branch only when asked, then a PR only when asked again', async () => {
+  it('pushes the patch branch only when asked, links the PR form, and opens no PR', async () => {
     const recorded = await selectAndPreview()
+    // The preview ran, and nothing was written yet.
+    expect(recorded.calls.some((c) => c.path === '/patches/preview')).toBe(true)
     expect(recorded.calls.some((c) => c.path === '/patches/cherry-pick')).toBe(false)
 
-    await user.click(screen.getByRole('button', { name: /create patch branch/i }))
+    await pushPatch()
     await screen.findByText(/patch branch created/i)
+    const link = screen.getByRole('link', { name: /open the pull request on github/i })
+    expect(link).toHaveAttribute('href', fx.cherryPickResult.pr_create_url)
+    expect(screen.getByText(/no pull request was created/i)).toBeInTheDocument()
+    const pick = recorded.calls.find((c) => c.path === '/patches/cherry-pick')!
+    expect(pick.body).toMatchObject({ push: true, expected_base_sha: fx.cleanPreview.base_sha })
     expect(recorded.calls.some((c) => c.path === '/pull-requests')).toBe(false)
-
-    await user.click(screen.getByRole('button', { name: /create pull request/i }))
-    expect(await screen.findByText('https://github.com/Arrcus/pyrad/pull/42'))
-      .toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /create pull request/i })).toBeNull()
   })
 
   it('applies only onto the tip the preview ran on, and says what it compared', async () => {
@@ -311,7 +318,7 @@ describe('patch workflow', () => {
       comparison_upstream_commit: fx.comparison.upstream_commit,
     })
 
-    await user.click(screen.getByRole('button', { name: /create patch branch/i }))
+    await pushPatch()
     await screen.findByText(/patch branch created/i)
     const pick = recorded.calls.find((c) => c.path === '/patches/cherry-pick')!
     expect(pick.body).toMatchObject({ expected_base_sha: fx.cleanPreview.base_sha })
@@ -323,35 +330,24 @@ describe('patch workflow', () => {
     await user.click(screen.getByLabelText(`Select ${'d'.repeat(12)}`))
 
     expect(screen.queryByText('Patch PR · preview')).toBeNull()
-    expect(screen.queryByRole('button', { name: /create patch branch/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /push patch branch/i })).toBeNull()
     expect(recorded.calls.some((c) => c.path === '/patches/cherry-pick')).toBe(false)
   })
 
   it('pushes exactly the commits that were previewed', async () => {
     const recorded = await selectAndPreview()
-    await user.click(screen.getByRole('button', { name: /create patch branch/i }))
+    await pushPatch()
     await screen.findByText(/patch branch created/i)
     const pick = recorded.calls.find((c) => c.path === '/patches/cherry-pick')!
     expect(pick.body).toMatchObject({ shas: fx.cleanPreview.order })
   })
 
-  it('in read-only mode pushes the patch branch only when asked, and links the PR form', async () => {
-    const recorded = await selectAndPreview({ health: fx.healthNoToken })
-
-    expect(screen.getByText('Read-only mode')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /create pull request/i })).toBeNull()
-    // The preview ran, and nothing was written yet.
-    expect(recorded.calls.some((c) => c.path === '/patches/preview')).toBe(true)
+  it('offers no push where the deployment disables pushing, and says why', async () => {
+    const recorded = await selectAndPreview({ health: fx.healthPushDisabled })
+    expect(screen.getByText(/applies cleanly/i)).toBeInTheDocument()
+    expect(screen.getByText('Pushing is disabled')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /push patch branch/i })).toBeNull()
     expect(recorded.calls.some((c) => c.path === '/patches/cherry-pick')).toBe(false)
-
-    await user.click(screen.getByRole('button', { name: /push patch branch \(no pr\)/i }))
-    const link = await screen.findByRole('link', { name: /open the pull request on github/i })
-    expect(link).toHaveAttribute('href', fx.cherryPickResult.pr_create_url)
-    const pick = recorded.calls.find((c) => c.path === '/patches/cherry-pick')!
-    expect(pick.body).toMatchObject({ push: true, expected_base_sha: fx.cleanPreview.base_sha })
-    // No token: the tool itself never opens the PR.
-    expect(recorded.calls.some((c) => c.path === '/pull-requests')).toBe(false)
-    expect(screen.queryByRole('button', { name: /create pull request/i })).toBeNull()
   })
 
   it('says plainly when nothing was built or tested', async () => {
@@ -364,35 +360,13 @@ describe('patch workflow', () => {
     expect(screen.getByText('Validation failed')).toBeInTheDocument()
     expect(screen.getByText(/exited with status 2/)).toBeInTheDocument()
     expect(screen.getByText('make: *** [build] Error 2')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /create patch branch|push patch branch/i }))
-      .toBeNull()
+    expect(screen.queryByRole('button', { name: /push patch branch/i })).toBeNull()
     expect(recorded.calls.some((c) => c.path === '/patches/cherry-pick')).toBe(false)
   })
 
-  it('with a token, still offers the pre-filled link beside creating the PR', async () => {
-    await selectAndPreview()
-    await user.click(screen.getByRole('button', { name: /create patch branch/i }))
-    await screen.findByText(/patch branch created/i)
-    expect(screen.getByRole('button', { name: /create pull request/i })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /open the pull request on github/i }))
-      .toBeInTheDocument()
-  })
-
-  it('opens the PR with the description the backend wrote', async () => {
-    const recorded = await selectAndPreview()
-    await user.click(screen.getByRole('button', { name: /create patch branch/i }))
-    await screen.findByText(/patch branch created/i)
-    await user.click(screen.getByRole('button', { name: /create pull request/i }))
-    await screen.findByText('https://github.com/Arrcus/pyrad/pull/42')
-    const call = recorded.calls.find((c) => c.path === '/pull-requests')!
-    expect(call.body).toMatchObject({
-      title: fx.cherryPickResult.pr_title, body: fx.cherryPickResult.pr_body,
-    })
-  })
-
   it('after a push, reports the branch, no PR yet, and CI as unavailable - never passing', async () => {
-    const recorded = await selectAndPreview({ health: fx.healthNoToken })
-    await user.click(screen.getByRole('button', { name: /push patch branch \(no pr\)/i }))
+    const recorded = await selectAndPreview()
+    await pushPatch()
     expect(await screen.findByText('CI status unavailable')).toBeInTheDocument()
     expect(screen.getByText(/no pull request has been opened from this branch yet/i))
       .toBeInTheDocument()
@@ -404,7 +378,6 @@ describe('patch workflow', () => {
 
   it('shows a PR found from git refs and each failing check', async () => {
     await selectAndPreview({
-      health: fx.healthNoToken,
       publishStatus: {
         ...fx.publishStatusNoToken,
         pull_requests: [{ number: 9, url: 'https://github.com/Arrcus/pyrad/pull/9' }],
@@ -419,7 +392,7 @@ describe('patch workflow', () => {
         },
       },
     })
-    await user.click(screen.getByRole('button', { name: /push patch branch \(no pr\)/i }))
+    await pushPatch()
     expect(await screen.findByText('CI failed')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '#9' }))
       .toHaveAttribute('href', 'https://github.com/Arrcus/pyrad/pull/9')
@@ -429,8 +402,8 @@ describe('patch workflow', () => {
   })
 
   it('refreshes the status only when asked, without pushing again', async () => {
-    const recorded = await selectAndPreview({ health: fx.healthNoToken })
-    await user.click(screen.getByRole('button', { name: /push patch branch \(no pr\)/i }))
+    const recorded = await selectAndPreview()
+    await pushPatch()
     await screen.findByText('CI status unavailable')
     const count = () => recorded.calls.filter((c) => c.path.startsWith('/publish-status')).length
     const before = count()
@@ -438,133 +411,260 @@ describe('patch workflow', () => {
     await waitFor(() => expect(count()).toBe(before + 1))
     expect(recorded.calls.filter((c) => c.path === '/patches/cherry-pick')).toHaveLength(1)
   })
+})
 
-  it('announces read-only mode in the header', async () => {
-    await openDashboard({ health: fx.healthNoToken })
-    expect(
-      await screen.findByText(/read-only mode — no github token; the tool opens no pull requests/i),
-    ).toBeInTheDocument()
+describe('pull requests and pushing', () => {
+  it('always says the tool never opens pull requests', async () => {
+    await openDashboard()
+    await screen.findByText(/v0\.1\.0/)
+    expect(screen.getByText(
+      /never opens pull requests — a person opens each one from its compare link/i,
+    )).toBeInTheDocument()
+    expect(screen.queryByText(/pushing is disabled on this deployment/i)).toBeNull()
+    expect(screen.queryByText(/read-only mode/i)).toBeNull()
+  })
+
+  it('announces in the header when the deployment disables pushing', async () => {
+    await openDashboard({ health: fx.healthPushDisabled })
+    expect(await screen.findByText(/pushing is disabled on this deployment/i))
+      .toBeInTheDocument()
+    expect(screen.getByText(/never opens pull requests/i)).toBeInTheDocument()
+  })
+
+  it('never offers to create a pull request, even if capabilities claim it can', async () => {
+    const recorded = await openDashboard({
+      health: {
+        ...fx.health,
+        capabilities: { ...fx.health.capabilities, create_pull_requests: true },
+      },
+    })
+    await compare()
+    await user.click(screen.getByRole('button', { name: /select critical/i }))
+    await user.click(screen.getByRole('button', { name: /preview 1 selected/i }))
+    await user.click(await screen.findByRole('button', { name: /push patch branch \(no pr\)/i }))
+    await screen.findByText(/patch branch created/i)
+
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
+    await screen.findByText('CREATED')
+    await user.click(screen.getByRole('button', { name: /^dry run$/i }))
+    await user.click(await screen.findByRole('button', { name: /push branch \(no pr\)/i }))
+    await screen.findByText('Branch pushed')
+
+    expect(screen.queryAllByRole('button', { name: /pull request/i })).toHaveLength(0)
+    expect(recorded.calls.some((c) => c.path.startsWith('/pull-requests'))).toBe(false)
   })
 })
 
 describe('upstream.md', () => {
+  const mdCalls = (recorded: Recorded) =>
+    recorded.calls.filter((c) => c.path === '/upstream-md/pr')
+
+  async function generate() {
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
+    await screen.findByText('CREATED')
+  }
+
+  async function dryRun(status = 'DRY_RUN_OK') {
+    await generate()
+    await user.click(screen.getByRole('button', { name: /^dry run$/i }))
+    await screen.findByText(status)
+  }
+
+  const pushMd = () => user.click(screen.getByRole('button', { name: /push branch \(no pr\)/i }))
+
   it('generates the document without proposing it', async () => {
     const recorded = await openDashboard()
     await resolve()
-    await user.click(screen.getByRole('button', { name: /^generate$/i }))
-    await screen.findByText('CREATED')
-    expect(recorded.calls.some((c) => c.path === '/upstream-md/pr')).toBe(false)
+    await generate()
+    expect(mdCalls(recorded)).toHaveLength(0)
   })
 
-  it('proposes it only when asked, and links the pull request', async () => {
+  it('dry-runs without pushing, and shows where the reviewed plan sends it', async () => {
     const recorded = await openDashboard()
     await resolve()
-    await user.click(screen.getByRole('button', { name: /^generate$/i }))
-    await screen.findByText('CREATED')
-    await user.click(screen.getByRole('button', { name: /create pull request/i }))
+    await dryRun()
 
-    expect(await screen.findByText('https://github.com/Arrcus/pyrad/pull/43'))
-      .toBeInTheDocument()
-    const call = recorded.calls.find((c) => c.path === '/upstream-md/pr')
-    expect(call?.body).toMatchObject({ package: 'pyrad', confirm: true })
-  })
-
-  it('reports why no pull request was opened', async () => {
-    await openDashboard({
-      upstreamMdPr: {
-        ...fx.upstreamMdPublish, status: 'CONFLICT', pull_request: null,
-        pushed: false, error: 'debian/upstream.md was not written by this tool',
-      },
-    })
-    await resolve()
-    await user.click(screen.getByRole('button', { name: /^generate$/i }))
-    await screen.findByText('CREATED')
-    await user.click(screen.getByRole('button', { name: /create pull request/i }))
-
-    expect(await screen.findByText(/CONFLICT: debian\/upstream.md was not written/))
-      .toBeInTheDocument()
-  })
-
-  it('keeps the link to open the PR when the branch was pushed but GitHub refused it', async () => {
-    await openDashboard({
-      upstreamMdPr: {
-        ...fx.upstreamMdPushed, status: 'PR_FAILED',
-        error: 'GitHub refused the pull request: Validation Failed',
-      },
-    })
-    await resolve()
-    await user.click(screen.getByRole('button', { name: /^generate$/i }))
-    await screen.findByText('CREATED')
-    await user.click(screen.getByRole('button', { name: /create pull request/i }))
-
-    expect(await screen.findByText(/PR_FAILED: GitHub refused the pull request/))
-      .toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /open the pull request on github/i }))
-      .toHaveAttribute('href', fx.upstreamMdPushed.pr_create_url)
-  })
-
-  it('dry-runs a proposal without pushing, and shows where it would go', async () => {
-    const recorded = await openDashboard({ upstreamMdPr: fx.upstreamMdDryRun })
-    await resolve()
-    await user.click(screen.getByRole('button', { name: /^generate$/i }))
-    await screen.findByText('CREATED')
-    await user.click(screen.getByRole('button', { name: /^dry run$/i }))
-
-    expect(await screen.findByText('DRY_RUN_OK')).toBeInTheDocument()
-    expect(screen.getByText('upstream-metadata/bookworm/pyrad')).toBeInTheDocument()
     expect(screen.getByText(/nothing was pushed/i)).toBeInTheDocument()
-    const call = recorded.calls.find((c) => c.path === '/upstream-md/pr')
-    expect(call?.body).toMatchObject({ package: 'pyrad', dry_run: true, push_only: false })
-    expect(call?.body).not.toHaveProperty('confirm')
-    // With a token the tool opens the PR itself; there is no push-only step.
-    expect(screen.queryByRole('button', { name: /push branch/i })).toBeNull()
+    const details = screen.getByText('Target branch (reviewed plan)').closest('dl')!
+    expect(within(details).getByText('aminor')).toBeInTheDocument()
+    expect(within(details).getByText('debian-upstream-tracking')).toBeInTheDocument()
+    expect(screen.getByText(
+      /affects the comparison only,\s+never where this metadata is published/i,
+    )).toBeInTheDocument()
+    // Nothing is on GitHub yet, so there is no link that would lead nowhere.
+    expect(screen.queryByRole('link', { name: 'Compare Link' })).toBeNull()
+    expect(mdCalls(recorded)).toHaveLength(1)
+    expect(recorded.calls.some((c) => c.path.startsWith('/publish-status'))).toBe(false)
   })
 
-  it('without a token, pushes only after a dry run and links the PR form', async () => {
-    const recorded = await openDashboard({
-      health: fx.healthNoToken,
-      upstreamMdPr: (body: { dry_run?: boolean }) =>
-        body.dry_run ? fx.upstreamMdDryRun : fx.upstreamMdPushed,
-    })
+  it('publishes from the reviewed plan alone: no target or branch name is sent', async () => {
+    const recorded = await openDashboard()
+    await selectPackage()
+    const branch = screen.getByLabelText('ARCoS target branch')
+    await waitFor(() => expect(branch).toHaveValue('aminor'))
+    await user.clear(branch)
+    await user.type(branch, 'aminor-hotfix')
+    await user.click(screen.getByRole('button', { name: /resolve upstream/i }))
+    await screen.findByText('Resolved upstream')
+    await dryRun()
+    await pushMd()
+    await screen.findByText('Branch pushed')
+
+    const [dry, push] = mdCalls(recorded)
+    for (const call of [dry, push]) {
+      expect(call.body).toMatchObject({ package: 'pyrad', release: 'bookworm', push_only: true })
+      expect(call.body).not.toHaveProperty('arcos_branch')
+      expect(call.body).not.toHaveProperty('branch_name')
+      expect(call.body).not.toHaveProperty('draft')
+    }
+    expect(dry.body).toMatchObject({ dry_run: true })
+    expect(dry.body).not.toHaveProperty('confirm')
+    expect(push.body).toMatchObject({ confirm: true })
+    expect(push.body).not.toHaveProperty('dry_run')
+    // The chosen branch still steers the comparison.
+    const resolveCall = recorded.calls.find((c) => c.path.startsWith('/upstream/pyrad'))!
+    expect(resolveCall.path).toContain('arcos_branch=aminor-hotfix')
+  })
+
+  it('pushes only after a dry run, once, and links the PR form', async () => {
+    const recorded = await openDashboard()
     await resolve()
-    await user.click(screen.getByRole('button', { name: /^generate$/i }))
-    await screen.findByText('CREATED')
-    expect(screen.queryByRole('button', { name: /create pull request/i })).toBeNull()
+    await generate()
     expect(screen.queryByRole('button', { name: /push branch/i })).toBeNull()
 
     await user.click(screen.getByRole('button', { name: /^dry run$/i }))
     await screen.findByText('DRY_RUN_OK')
-    const calls = () => recorded.calls.filter((c) => c.path === '/upstream-md/pr')
-    expect(calls()).toHaveLength(1)
-    expect(calls()[0].body).toMatchObject({ dry_run: true, push_only: true })
+    expect(mdCalls(recorded)).toHaveLength(1)
 
-    await user.click(screen.getByRole('button', { name: /push branch \(no pr\)/i }))
+    await pushMd()
     const link = await screen.findByRole('link', { name: /open the pull request on github/i })
     expect(link).toHaveAttribute('href', fx.upstreamMdPushed.pr_create_url)
-    expect(calls()).toHaveLength(2)
-    expect(calls()[1].body).toMatchObject({ confirm: true, push_only: true })
-    expect(calls()[1].body).not.toHaveProperty('dry_run')
+    expect(mdCalls(recorded)).toHaveLength(2)
     expect(screen.getByText(/no pull request was created/i)).toBeInTheDocument()
+    // Nothing more to push in this view.
+    expect(screen.queryByRole('button', { name: /push branch/i })).toBeNull()
+  })
+
+  it('links the Compare Link and the file on the branch after a push', async () => {
+    await openDashboard()
+    await resolve()
+    await dryRun()
+    await pushMd()
+
+    expect(await screen.findByRole('link', { name: 'Compare Link' }))
+      .toHaveAttribute('href', 'https://github.com/Arrcus/pyrad/compare/aminor...debian-upstream-tracking')
+    expect(screen.getByRole('link', { name: 'debian/upstream.md on the branch' }))
+      .toHaveAttribute('href', fx.upstreamMdPushed.file_url)
+    expect(screen.getByRole('link', { name: /open the pull request on github/i }))
+      .toBeInTheDocument()
+  })
+
+  it('shows a covered package as covered, with its links and nothing to push', async () => {
+    const recorded = await openDashboard({ upstreamMdPr: fx.upstreamMdCovered })
+    await user.selectOptions(screen.getByLabelText('Debian release'), 'trixie')
+    await resolve()
+    await dryRun('COVERED')
+
+    expect(screen.getByText('COVERED')).toHaveClass('tone-neutral')
+    expect(screen.getByText(/covered by the bookworm branch/i))
+      .toHaveTextContent(/debian-upstream-tracking — nothing to push/)
+    expect(screen.getByRole('link', { name: 'Compare Link' }))
+      .toHaveAttribute('href', fx.upstreamMdCovered.compare_url)
+    expect(screen.getByRole('link', { name: 'debian/upstream.md on the branch' }))
+      .toHaveAttribute('href', fx.upstreamMdCovered.file_url)
+    expect(screen.queryByRole('button', { name: /push branch/i })).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(mdCalls(recorded)[0].body).toMatchObject({ release: 'trixie', dry_run: true })
+  })
+
+  it('shows a push that found the file covered as an answer, not an error', async () => {
+    await openDashboard({
+      upstreamMdPr: (body: { dry_run?: boolean }) =>
+        body.dry_run ? fx.upstreamMdDryRun : fx.upstreamMdCovered,
+    })
+    await resolve()
+    await dryRun()
+    await pushMd()
+
+    expect(await screen.findByText('Nothing pushed')).toBeInTheDocument()
+    expect(screen.getByText(/covered by the bookworm branch/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Compare Link' })).toBeInTheDocument()
+    expect(screen.queryByText('Branch pushed')).toBeNull()
+    expect(screen.queryByRole('button', { name: /push branch/i })).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('shows a pull request the server found, without acting on it', async () => {
+    await openDashboard({
+      upstreamMdPr: (body: { dry_run?: boolean }) =>
+        body.dry_run ? fx.upstreamMdDryRun : fx.upstreamMdPrFound,
+    })
+    await resolve()
+    await dryRun()
+    await pushMd()
+
+    expect(await screen.findByRole('link', { name: 'https://github.com/Arrcus/pyrad/pull/43' }))
+      .toHaveAttribute('href', 'https://github.com/Arrcus/pyrad/pull/43')
+    expect(screen.getByText(/did not open it and changes nothing on it/i)).toBeInTheDocument()
+    expect(screen.queryAllByRole('button', { name: /pull request/i })).toHaveLength(0)
+  })
+
+  it('reports a dry run the server refused, with its reason and no push', async () => {
+    await openDashboard({
+      upstreamMdPr: {
+        ...fx.upstreamMdDryRun, status: 'DRIFT',
+        error: 'the file no longer matches the reviewed plan',
+      },
+    })
+    await resolve()
+    await dryRun('DRIFT')
+
+    expect(screen.getByText('DRIFT')).toHaveClass('tone-bad')
+    expect(screen.getByText('the file no longer matches the reviewed plan')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /push branch/i })).toBeNull()
   })
 
   it('reports a push that stopped short as an error, not a link', async () => {
     await openDashboard({
-      health: fx.healthNoToken,
       upstreamMdPr: (body: { dry_run?: boolean }) => body.dry_run ? fx.upstreamMdDryRun : {
-        ...fx.upstreamMdPushed, status: 'BRANCH_EXISTS', pushed: false, pr_create_url: null,
-        error: 'upstream-metadata/bookworm/pyrad already exists on the fork',
+        ...fx.upstreamMdDryRun, status: 'BRANCH_EXISTS',
+        error: 'debian-upstream-tracking already exists on the fork',
       },
     })
     await resolve()
-    await user.click(screen.getByRole('button', { name: /^generate$/i }))
-    await screen.findByText('CREATED')
-    await user.click(screen.getByRole('button', { name: /^dry run$/i }))
-    await screen.findByText('DRY_RUN_OK')
-    await user.click(screen.getByRole('button', { name: /push branch \(no pr\)/i }))
+    await dryRun()
+    await pushMd()
 
-    expect(await screen.findByText(/BRANCH_EXISTS: upstream-metadata\/bookworm\/pyrad already exists/))
+    expect(await screen.findByText(/BRANCH_EXISTS: debian-upstream-tracking already exists/))
       .toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /open the pull request on github/i })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Compare Link' })).toBeNull()
+  })
+
+  it('offers no push where the deployment disables pushing, and says why', async () => {
+    const recorded = await openDashboard({ health: fx.healthPushDisabled })
+    await resolve()
+    await dryRun()
+
+    expect(screen.queryByRole('button', { name: /push branch/i })).toBeNull()
+    expect(screen.getByText(/pushing is disabled on this deployment, so this branch/i))
+      .toBeInTheDocument()
+    expect(mdCalls(recorded)).toHaveLength(1)
+  })
+
+  it('explains a push the server refuses because pushing is disabled', async () => {
+    await openDashboard({
+      upstreamMdPr: (body: { dry_run?: boolean }) => body.dry_run
+        ? fx.upstreamMdDryRun
+        : errorResponse('PUSH_DISABLED', 'This deployment does not push.', 403),
+    })
+    await resolve()
+    await dryRun()
+    await pushMd()
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Pushing is disabled on this deployment')
+    expect(alert).toHaveTextContent(/previews and dry runs still work/i)
   })
 
   it('shows what a reviewer should check before merging', async () => {
@@ -587,27 +687,23 @@ describe('upstream.md', () => {
     expect(screen.getByText('BRANCH_NOT_VERIFIED')).toBeInTheDocument()
   })
 
-  it('tracks the pushed branch\'s PR and CI after a push-only push', async () => {
+  it('tracks the pushed branch\'s PR and CI after a push', async () => {
     const recorded = await openDashboard({
-      health: fx.healthNoToken,
-      upstreamMdPr: (body: { dry_run?: boolean }) =>
-        body.dry_run ? fx.upstreamMdDryRun : fx.upstreamMdPushed,
       publishStatus: {
-        ...fx.publishStatusNoToken, head_branch: 'upstream-metadata/bookworm/pyrad',
+        ...fx.publishStatusNoToken, head_branch: 'debian-upstream-tracking',
         pull_requests: [{ number: 35, url: 'https://github.com/Arrcus/pyrad/pull/35' }],
       },
     })
     await resolve()
-    await user.click(screen.getByRole('button', { name: /^generate$/i }))
-    await screen.findByText('CREATED')
-    await user.click(screen.getByRole('button', { name: /^dry run$/i }))
-    await screen.findByText('DRY_RUN_OK')
+    await dryRun()
     // Nothing is looked up before there is a pushed branch.
     expect(recorded.calls.some((c) => c.path.startsWith('/publish-status'))).toBe(false)
-    await user.click(screen.getByRole('button', { name: /push branch \(no pr\)/i }))
+    await pushMd()
     expect(await screen.findByRole('link', { name: '#35' }))
       .toHaveAttribute('href', 'https://github.com/Arrcus/pyrad/pull/35')
     expect(screen.getByText('CI status unavailable')).toBeInTheDocument()
+    const status = recorded.calls.find((c) => c.path.startsWith('/publish-status'))!
+    expect(status.path).toContain('branch=debian-upstream-tracking')
   })
 
   it('labels the metadata PR apart from the patch PR', async () => {

@@ -418,14 +418,20 @@ export interface PublishResult {
   pushed: boolean
   title: string
   pull_request: PullRequest | null
-  /** GitHub's pre-filled 'open a pull request' page for this branch. Set by push-only runs and their dry runs, which open no pull request themselves. */
+  /** GitHub's pre-filled 'open a pull request' page for this branch. This tool never opens the pull request itself. */
   pr_create_url: string | null
+  /** COVERED only: the release whose branch already proposes this exact file; branch and commit are that branch's. */
+  covered_by: string | null
   error: string | null
   diff: string | null
   updated_at: string | null
+  /** The branch against its target on GitHub - what a person opens the pull request from. Derived, so a record can never carry a stale one. */
+  compare_url: string | null
+  /** debian/upstream.md as the branch holds it on GitHub. */
+  file_url: string | null
 }
 
-export type PublishStatus = "DRY_RUN_OK" | "BRANCH_PUSHED" | "PR_OPENED" | "PR_EXISTS" | "PR_MERGED" | "PR_CLOSED" | "NO_CHANGE" | "SKIPPED_NO_UPSTREAM" | "SKIPPED_NEEDS_REVIEW" | "SKIPPED_EXCLUDED" | "CONFLICT" | "DRIFT" | "BRANCH_EXISTS" | "BASE_UNREADABLE" | "PUSH_FAILED" | "PR_FAILED" | "ERROR"
+export type PublishStatus = "DRY_RUN_OK" | "BRANCH_PUSHED" | "COVERED" | "PR_OPENED" | "PR_EXISTS" | "PR_MERGED" | "PR_CLOSED" | "NO_CHANGE" | "SKIPPED_NO_UPSTREAM" | "SKIPPED_NEEDS_REVIEW" | "SKIPPED_EXCLUDED" | "CONFLICT" | "DRIFT" | "BRANCH_EXISTS" | "BASE_UNREADABLE" | "PUSH_FAILED" | "PR_FAILED" | "ERROR"
 
 export interface PublishStatusReport {
   package: string
@@ -453,17 +459,6 @@ export interface PullRequest {
   head_sha?: string | null
   draft?: boolean
   already_existed?: boolean
-}
-
-export interface PullRequestRequest {
-  package: string
-  release: string
-  arcos_branch: string
-  head_branch: string
-  title?: string | null
-  body?: string | null
-  draft?: boolean
-  applied?: string[]
 }
 
 export interface RefSelection {
@@ -584,15 +579,11 @@ export type UpstreamMdOutcome = "CREATED" | "UPDATED" | "NO_CHANGE" | "CONFLICT"
 export interface UpstreamMdPrRequest {
   package: string
   release: string
-  arcos_branch?: string | null
-  /** Must be debian-upstream-tracking, debian-upstream-tracking-<release>, or under upstream-metadata/ or debian-upstream-tracking/, and not the target branch. */
-  branch_name?: string | null
-  draft?: boolean
-  /** Build and check the exact commit, then stop: nothing is pushed and no pull request is opened. */
+  /** Build and check the exact commit, then stop: nothing is pushed. */
   dry_run?: boolean
-  /** Must be true. Opening a pull request is an explicit act, never a side effect of generating the file. */
+  /** Must be true unless dry_run. Pushing is an explicit act, never a side effect of generating the file. */
   confirm?: boolean
-  /** Push the branch but open no pull request: the result is BRANCH_PUSHED with pr_create_url, GitHub's page to open it from. Needs no GitHub token; still needs confirm=true unless dry_run. */
+  /** Always true: the branch is pushed and the result carries its Compare Link (compare_url) and pr_create_url; a person opens the pull request. false is refused - this application never opens one. */
   push_only?: boolean
 }
 

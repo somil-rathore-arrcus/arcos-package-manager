@@ -215,7 +215,7 @@ def plan_entry_problems(entry: dict, text: str) -> List[str]:
 
 def main(release: str) -> int:
     mapping_path = ROOT / "out" / f"upstream-mapping-{release}.csv"
-    md_dir = ROOT / "out" / "upstream-md"
+    md_dir = ROOT / "out" / f"upstream-md-{release}"
     plan_path = ROOT / "out" / f"upstream-md-plan-{release}.json"
 
     if not mapping_path.exists():

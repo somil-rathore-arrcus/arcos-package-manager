@@ -223,14 +223,19 @@ class PublishStatus(str, Enum):
     owns, a closed PR, a file that no longer matches the plan - is its own
     status, so a batch summary says what needs looking at rather than "failed".
 
-    BRANCH_PUSHED is a push-only run's success: the branch is on the fork and a
-    link to open the pull request was generated, but no pull request exists. It
-    is not done - a later run with a token resumes it and opens the PR without
-    pushing again - and it is not a failure, so it is never retried as one.
+    BRANCH_PUSHED is a push's success: the branch is on the fork and a link to
+    open the pull request was generated, but no pull request exists - this tool
+    never opens one. It is not a failure, so it is never retried as one.
+
+    COVERED means another release's branch already proposes the identical file
+    to the same repository and target branch, so nothing is pushed: one target
+    branch takes one debian/upstream.md, and a second branch carrying the same
+    bytes would only duplicate the first.
     """
 
     DRY_RUN_OK = "DRY_RUN_OK"
     BRANCH_PUSHED = "BRANCH_PUSHED"
+    COVERED = "COVERED"
     PR_OPENED = "PR_OPENED"
     PR_EXISTS = "PR_EXISTS"
     PR_MERGED = "PR_MERGED"
@@ -292,4 +297,9 @@ class ErrorCode(str, Enum):
     # GitHub's API quota is spent: nothing is wrong with the token or the
     # repository, and retrying later is the whole remedy.
     RATE_LIMITED = "RATE_LIMITED"
+    # This application never opens a pull request; a person opens each one
+    # from the branch's Compare Link.
+    PULL_REQUESTS_DISABLED = "PULL_REQUESTS_DISABLED"
+    # This machine is not the one pushes run from (APM_ALLOW_PUSH is unset).
+    PUSH_DISABLED = "PUSH_DISABLED"
     INTERNAL = "INTERNAL"

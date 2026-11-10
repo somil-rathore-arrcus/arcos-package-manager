@@ -53,6 +53,7 @@ def build_workspaces(environment: Environment, settings, transports):
         committer_name=environment.committer_name,
         committer_email=environment.committer_email,
         private_url_hint=_private_hint(settings),
+        allow_push=environment.allow_push,
     )
 
 
@@ -204,18 +205,23 @@ class Container:
             # Whether writes need APM_API_TOKEN; never the token itself.
             "api_token_required": bool(self.environment.api_token),
             "read_private_repositories": self.private_access(),
-            "create_pull_requests": self.github.can_create_pull_requests,
+            # This application never opens a pull request: it pushes a branch
+            # and a person opens the pull request from its Compare Link.
+            "create_pull_requests": False,
+            "pull_requests": "never",
+            # Whether this machine may push (APM_ALLOW_PUSH).
+            "push_enabled": self.workspaces.allow_push,
             # Checks are readable only through the API; a pull request opened
             # from a pushed branch is found from git refs either way.
-            "read_checks": self.github.can_create_pull_requests,
+            "read_checks": self.github.has_token,
             "detect_pull_requests": "git refs over SSH",
             "patch_validation_commands": len(self.settings.patches["validation_commands"]),
             "git": self.transports.describe(),
             "workspace_root": self.workspaces.root,
             "mapping": self.mapping.describe(),
-            # Write operations are disabled outright without a token, so the UI
-            # can say so up front rather than failing at the last step.
-            "read_only": not self.github.can_create_pull_requests,
+            # Nothing can be pushed from here, so the UI can say so up front
+            # rather than failing at the last step.
+            "read_only": not self.workspaces.allow_push,
             "storage": self.storage(),
         }
 

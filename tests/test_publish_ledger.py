@@ -46,7 +46,7 @@ def test_results_survive_a_reload_and_render_a_table(tmp_path):
 
     table = ledger.md_path.read_text()
     assert "| mstpd | PR_OPENED | upstream-metadata/bookworm/mstpd | aaaaaaaaaaaa | " \
-           "https://github.com/Arrcus/mstpd/pull/3 |  |" in table
+           " | https://github.com/Arrcus/mstpd/pull/3 |  |" in table
     assert "remote rejected \\| policy" in table
 
 
@@ -86,8 +86,13 @@ def test_a_pushed_only_branch_keeps_its_full_link_and_shows_a_short_one(tmp_path
 
     table = ledger.md_path.read_text()
     assert (f"| mstpd | BRANCH_PUSHED | {BRANCH} | aaaaaaaaaaaa | "
+            f"https://github.com/Arrcus/mstpd/compare/aminor...{BRANCH} | "
             f"https://github.com/Arrcus/mstpd/compare/aminor...{BRANCH}"
             f"?quick_pull=1 |  |") in table
+    assert payload["entries"][0]["compare_url"] == \
+        f"https://github.com/Arrcus/mstpd/compare/aminor...{BRANCH}"
+    assert payload["entries"][0]["file_url"] == \
+        f"https://github.com/Arrcus/mstpd/blob/{BRANCH}/debian/upstream.md"
     assert "title=" not in table and "Problem" not in table
 
     again = PublishLedger.for_release(tmp_path, "bookworm")

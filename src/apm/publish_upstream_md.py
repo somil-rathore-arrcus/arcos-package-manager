@@ -1,38 +1,37 @@
-"""Propose the reviewed debian/upstream.md files as pull requests.
+"""Push the reviewed debian/upstream.md files, one branch per package.
 
     apm publish-upstream-md --release bookworm --package mstpd            # dry run
     apm publish-upstream-md --release bookworm --package mstpd \\
         --apply --confirm mstpd
-    apm publish-upstream-md --release bookworm --package mstpd \\
-        --apply --push-only --confirm mstpd                               # no token
-    apm publish-upstream-md --release bookworm --all --apply --confirm-count 26
+    apm publish-upstream-md --release bookworm --all --apply --confirm-count 21
 
 A dry run is the default. It performs every read and builds - and checks - the
-exact commit that would be pushed, then stops: no branch, no push, no PR. Its
-results go to upstream-md-pr-dryrun-<release>.json so they never overwrite the
-record of a real run.
+exact commit that would be pushed, then stops: no branch, no push. Its results
+go to upstream-md-pr-dryrun-<release>.json so they never overwrite the record of
+a real run.
 
---apply pushes one branch per package under upstream-metadata/<release>/ and
-opens a pull request against the package's ARCoS branch. It needs
-APM_GITHUB_TOKEN, and a confirmation that names what it is about to push.
+--apply pushes one branch per package (named by settings.yaml, or by the
+package's record when it already has one) and stops there. No pull request is
+opened - this application never opens one - and no GitHub token is needed. Each
+package ends BRANCH_PUSHED with its Compare Link and a link to GitHub's
+pre-filled "open a pull request" page; a person with access to the repository
+opens the pull request from there. A package whose repository and target branch
+another release's branch already proposes, with the identical file, ends COVERED
+and gets no branch of its own. --push-only is accepted, and changes nothing:
+every apply is push-only. An apply also needs a confirmation that names what it
+is about to push, and runs only where pushing is allowed (APM_ALLOW_PUSH).
+
 Results are recorded per package in out/upstream-md-pr-results-<release>.json;
-re-running resumes from there instead of repeating work.
-
---push-only, with --apply, pushes the branches the same way - the same checks
-and the same confirmation - but opens no pull request and needs no token. Each
-package ends BRANCH_PUSHED with a link to GitHub's pre-filled "open a pull
-request" page; a person with access to the repository opens the pull request
-from there. out/upstream-md-pr-links-<release>.md is rewritten after every
-push-only apply with every branch the ledger has waiting - not only this run's
-- with its title and description. A later push-only run leaves those packages
-alone; a later --apply with a token resumes them and opens their pull requests
-without pushing again. Without --apply, --push-only is a dry run that writes
-the links an apply would give, and the ones already waiting, to
-out/upstream-md-pr-links-dryrun-<release>.md.
+re-running resumes from there instead of repeating work. After every apply,
+out/upstream-md-pr-links-<release>.md is rewritten with every branch the ledger
+has waiting - not only this run's - with its title and description, and the
+consolidated report out/upstream-md-publishing-report.md is rebuilt for every
+release (see publishing_report). A dry run writes the links its pushes would
+give, and the ones already waiting, to out/upstream-md-pr-links-dryrun-<release>.md.
 
 What is committed is the file generate-upstream-md wrote and you reviewed, byte
-for byte. If it changed since, or the mapping no longer renders it, the package
-is reported as DRIFT and left alone.
+for byte, from out/upstream-md-<release>/. If it changed since, or the mapping
+no longer renders it, the package is reported as DRIFT and left alone.
 """
 
 from __future__ import annotations
@@ -57,14 +56,16 @@ _LINKED = (PublishStatus.BRANCH_PUSHED, PublishStatus.DRY_RUN_OK)
 def run(release: str = "bookworm", out_dir: Path = None, plan: Path = None,
         packages_wanted: List[str] = None, all_packages: bool = False,
         apply: bool = False, confirm: List[str] = None,
-        confirm_count: int = None, draft: bool = False, title_prefix: str = "",
+        confirm_count: int = None, title_prefix: str = "",
         limit: int = None, stop_after_failures: int = 3,
         retry_failed: bool = False, recheck: bool = False,
         exclude: List[str] = None, show_diff: bool = False,
-        push_only: bool = False, container=None) -> int:
+        push_only: bool = True, container=None) -> int:
     from .services.container import Container
     from .services.publish_ledger import PublishLedger, all_records
-    from .services.upstream_md_publisher import PublishError, load_targets
+    from .services.upstream_md_publisher import (
+        NO_PULL_REQUESTS, PublishError, load_targets,
+    )
 
     out_dir = Path(out_dir or ROOT / "out")
     plan = Path(plan or out_dir / f"upstream-md-plan-{release}.json")
@@ -102,16 +103,20 @@ def run(release: str = "bookworm", out_dir: Path = None, plan: Path = None,
     ledger = history if apply else PublishLedger.for_release(
         out_dir, release, dry_run=True
     )
+    if not push_only:
+        print(f"stopped: {NO_PULL_REQUESTS} Nothing was pushed.", file=sys.stderr)
+        return 2
     queue, kept = publisher.select(
         targets, history, retry_failed=retry_failed, recheck=recheck, limit=limit,
-        push_only=push_only,
     )
     queue, shared = publisher.refuse_shared_branches(queue)
     settled = settled + shared
     waiting = [k for k in kept if k.status is PublishStatus.BRANCH_PUSHED]
+    others = all_records(out_dir)
+    pushes = publisher.would_push(queue, others)
 
     if apply and confirm:
-        names = {t.package for t, _ in queue}
+        names = {t.package for t, _ in pushes}
         if set(confirm) != names:
             print(
                 f"--confirm names {', '.join(sorted(confirm)) or 'nothing'} but "
@@ -119,30 +124,24 @@ def run(release: str = "bookworm", out_dir: Path = None, plan: Path = None,
                 f"Nothing was pushed.", file=sys.stderr,
             )
             return 2
-        confirm_count = len(queue)
+        confirm_count = len(pushes)
 
-    if apply and push_only:
-        mode = ("APPLY (push only) - branches will be pushed; no pull request "
-                "will be opened")
-    elif apply:
-        mode = "APPLY - branches will be pushed and PRs opened"
-    elif push_only:
-        mode = ("DRY RUN (push only) - nothing will be pushed; showing the "
-                "links an apply would give")
+    if apply:
+        mode = ("APPLY - branches will be pushed; no pull request will be "
+                "opened (this tool never opens one)")
     else:
-        mode = "DRY RUN - nothing will be pushed"
+        mode = ("DRY RUN - nothing will be pushed; showing the links an apply "
+                "would give")
     print(f"{mode}\n")
     print(f"  plan        {plan}")
     print(f"  to process  {len(queue)}")
+    if len(pushes) != len(queue):
+        print(f"    of which another release's branch covers "
+              f"{len(queue) - len(pushes)}: never pushed")
     print(f"  already done {len(kept) - len(waiting)}")
     if waiting:
         print(f"  pushed, waiting for a PR {len(waiting)}")
     print(f"  not eligible {len(settled)}\n")
-    if draft and push_only:
-        # A link can only fill in the form; whether it is a draft is chosen on
-        # the form itself.
-        print('  note: a link cannot open a draft. Choose "Create draft pull '
-              'request" on GitHub\'s form instead.\n')
 
     def progress(index, total, package):
         print(f"[{index}/{total}] {package}", flush=True)
@@ -150,9 +149,8 @@ def run(release: str = "bookworm", out_dir: Path = None, plan: Path = None,
     try:
         results = publisher.publish_many(
             queue, apply=apply, ledger=ledger, confirm_count=confirm_count,
-            stop_after_failures=stop_after_failures, draft=draft,
-            title_prefix=title_prefix, progress=progress, push_only=push_only,
-            others=all_records(out_dir),
+            stop_after_failures=stop_after_failures,
+            title_prefix=title_prefix, progress=progress, others=others,
         )
     except PublishError as exc:
         print(f"\nstopped: {exc}", file=sys.stderr)
@@ -171,21 +169,20 @@ def run(release: str = "bookworm", out_dir: Path = None, plan: Path = None,
 
     targets_by_package = {t.package: t for t, _ in queue}
     _print_results(results, show_diff, targets_by_package)
-    links = None
-    waiting_now: List[PublishResult] = []
-    if push_only:
-        # Release-wide, from the real ledger: a link a person has yet to use is
-        # never dropped because this run did not touch its package.
-        waiting_now = [e for e in history.entries()
-                       if e.status is PublishStatus.BRANCH_PUSHED]
+    waiting_now = [e for e in history.entries()
+                   if e.status is PublishStatus.BRANCH_PUSHED]
+    report = None
+    if apply:
+        links, report = refresh_records(out_dir, release, history,
+                                        list(all_targets.values()))
+    else:
+        # Release-wide, from the real ledger, plus what this dry run would push.
         listed = {e.package: e for e in waiting_now}
-        if not apply:
-            listed.update((r.package, r) for r in results
-                          if r.status in _LINKED and r.pr_create_url)
+        listed.update((r.package, r) for r in results
+                      if r.status in _LINKED and r.pr_create_url)
         links = write_links(
-            links_path(out_dir, release, dry_run=not apply), release,
-            [listed[name] for name in sorted(listed)], all_targets,
-            dry_run=not apply,
+            links_path(out_dir, release, dry_run=True), release,
+            [listed[name] for name in sorted(listed)], all_targets, dry_run=True,
         )
     everything = results + kept + settled
     print("\nSummary:\n")
@@ -193,9 +190,10 @@ def run(release: str = "bookworm", out_dir: Path = None, plan: Path = None,
         print(f"  {status:<22} {count}")
     print(f"\n  ledger  {ledger.json_path}")
     print(f"          {ledger.md_path}")
-    if links is not None:
-        print(f"  links   {links}")
-    if apply and push_only:
+    print(f"  links   {links}")
+    if report is not None:
+        print(f"  report  {report}")
+    if apply:
         if any(r.status is PublishStatus.BRANCH_PUSHED for r in results):
             print(f"\nBranches were pushed. No pull request was created. Open "
                   f"each one with its link in {links}; the person opening it "
@@ -212,6 +210,25 @@ def run(release: str = "bookworm", out_dir: Path = None, plan: Path = None,
     if not apply:
         print("\nNothing was pushed. No pull request was created.")
     return 1 if any(r.status.is_failure for r in results) else 0
+
+
+def refresh_records(out_dir: Path, release: str, ledger, targets) -> tuple:
+    """After a push - from this command or the dashboard - rewrite what a person
+    works from: the release's links file, with every branch its ledger has
+    waiting, and the consolidated report for every release. A report that
+    cannot be rebuilt is logged, never a reason to fail a push that happened.
+    Returns (links path, report path or None)."""
+    from .publishing_report import write as write_report
+
+    waiting = [e for e in ledger.entries() if e.status is PublishStatus.BRANCH_PUSHED]
+    links = write_links(links_path(out_dir, release), release, waiting,
+                        {t.package: t for t in targets})
+    try:
+        report = write_report(out_dir)
+    except Exception:  # noqa: BLE001 - the push already happened
+        log.exception("the publishing report could not be rebuilt")
+        report = None
+    return links, report
 
 
 def links_path(out_dir: Path, release: str, dry_run: bool = False) -> Path:
@@ -258,6 +275,9 @@ def write_links(path: Path, release: str, results: List[PublishResult],
             "- Pushed: no - the link works once an apply pushes the branch",
             f"- Link: {r.pr_create_url}",
         ]
+        if r.compare_url:
+            lines += [f"- Compare Link: {r.compare_url}",
+                      f"- debian/upstream.md: {r.file_url}"]
         if "&body=" not in r.pr_create_url:
             lines.append("- The description is too long for the link: paste "
                          "it from below.")
@@ -343,7 +363,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     mode.add_argument("--dry-run", action="store_true",
                       help="the default: build and check, push nothing")
     mode.add_argument("--apply", action="store_true",
-                      help="push branches and open pull requests")
+                      help="push branches (never opens a pull request)")
     parser.add_argument(
         "--confirm", action="append",
         help="with --apply: the package(s) you expect to be pushed; must match",
@@ -354,11 +374,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--push-only", action="store_true",
-        help="with --apply: push branches but do not open pull requests; print "
-             "a GitHub link to open each one. Needs no APM_GITHUB_TOKEN.",
+        help="accepted for older command lines: every apply pushes the branch "
+             "and opens no pull request",
     )
-    parser.add_argument("--draft", action="store_true",
-                        help="open the pull requests as drafts")
     parser.add_argument("--title-prefix", default="",
                         help='e.g. "BR-123: " for a Jira id')
     parser.add_argument("--limit", type=int,
@@ -382,19 +400,19 @@ def run_from_args(args) -> int:
         plan=Path(args.plan) if args.plan else None,
         packages_wanted=args.package, all_packages=args.all, apply=args.apply,
         confirm=args.confirm, confirm_count=args.confirm_count,
-        draft=args.draft, title_prefix=args.title_prefix, limit=args.limit,
+        title_prefix=args.title_prefix, limit=args.limit,
         stop_after_failures=args.stop_after_failures,
         retry_failed=args.retry_failed, recheck=args.recheck,
         exclude=args.exclude, show_diff=args.show_diff,
-        push_only=args.push_only,
     )
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="apm.publish_upstream_md",
-        description="Propose the reviewed debian/upstream.md files as pull "
-                    "requests. A dry run unless --apply is given.",
+        description="Push the reviewed debian/upstream.md files, one branch "
+                    "per package; never opens a pull request. A dry run unless "
+                    "--apply is given.",
     )
     add_arguments(parser)
     parser.add_argument("-v", "--verbose", action="store_true")

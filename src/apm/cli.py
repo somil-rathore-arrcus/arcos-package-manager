@@ -90,6 +90,12 @@ def cmd_publish_upstream_md(args) -> int:
     return run_from_args(args)
 
 
+def cmd_upstream_md_report(args) -> int:
+    from .publishing_report import run as run_report
+
+    return run_report(Path(args.out_dir), check=args.verify)
+
+
 def cmd_resolve(args) -> int:
     settings, env, cache, transports = _context()
     packages = load_packages()
@@ -320,11 +326,22 @@ def main(argv=None) -> int:
 
     p_pub = sub.add_parser(
         "publish-upstream-md",
-        help="propose the reviewed debian/upstream.md files as PRs "
-             "(dry run unless --apply)",
+        help="push the reviewed debian/upstream.md files, one branch per "
+             "package; never opens a PR (dry run unless --apply)",
     )
     publish_arguments(p_pub)
     p_pub.set_defaults(func=cmd_publish_upstream_md)
+
+    p_report = sub.add_parser(
+        "upstream-md-report",
+        help="rebuild the consolidated Bookworm/Trixie publishing report",
+    )
+    p_report.add_argument("--out-dir", default=str(ROOT / "out"))
+    p_report.add_argument(
+        "--verify", action="store_true",
+        help="first check every pushed branch on GitHub (read-only)",
+    )
+    p_report.set_defaults(func=cmd_upstream_md_report)
 
     args = parser.parse_args(argv)
     logging.basicConfig(

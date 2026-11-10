@@ -1,14 +1,13 @@
-"""Opening pull requests, and nothing else automatically.
+"""GitHub, read-only: links a person opens, and lookups of what exists.
 
-Every method here is called only from an explicit user action. There is no code
-path that opens a pull request as a side effect of resolving, comparing or
-generating - a PR is visible to a whole team, and the tool never creates one on
-its own initiative.
+This application never creates, opens, submits or merges a pull request. It
+pushes a branch and hands back the page a person opens the pull request from
+(pull_request_link, the Compare Link). The client below makes GET requests only,
+whatever token is configured - there is no method that writes to GitHub, and a
+test reads this file to keep it that way.
 
 Reading private repositories works over SSH without a token; only the REST API
-needs one, so the absence of a token degrades to "cannot open PRs" rather than
-breaking the application. Where a branch can be pushed but no token exists,
-pull_request_link gives the page a person opens the pull request from instead.
+needs one, for looking up a pull request or its checks.
 """
 
 from __future__ import annotations
@@ -96,7 +95,9 @@ class GitHubService:
         self._client = client
 
     @property
-    def can_create_pull_requests(self) -> bool:
+    def has_token(self) -> bool:
+        """Whether the REST API can be read: pull request and check lookups.
+        Never a licence to write - nothing here writes."""
         return bool(self.token)
 
     def _headers(self) -> dict:
@@ -109,6 +110,12 @@ class GitHubService:
         return headers
 
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        if method != "GET":
+            # Nothing in this application writes to GitHub.
+            raise GitHubError(
+                ErrorCode.PULL_REQUESTS_DISABLED,
+                f"Refusing {method} {path}: this application only reads GitHub.",
+            )
         url = f"{self.api_url}{path}"
         try:
             if self._client is not None:
@@ -129,15 +136,14 @@ class GitHubService:
         if not self.token:
             raise GitHubError(
                 ErrorCode.AUTH_REQUIRED,
-                "A GitHub token is required to open pull requests. Set "
-                "APM_GITHUB_TOKEN (see .env.example).",
+                "A GitHub token is required to read this from the GitHub API. "
+                "Set APM_GITHUB_TOKEN (see .env.example).",
             )
 
     # -- reads -------------------------------------------------------------
 
     def get_repository(self, slug: str) -> dict:
-        """The repository as the token sees it. Used before any push, so a token
-        that cannot open a PR fails the run before a branch is left behind."""
+        """The repository as the token sees it (apm doctor's access check)."""
         self._require_token()
         response = self._request("GET", f"/repos/{slug}")
         if response.status_code == 200:
@@ -291,56 +297,6 @@ class GitHubService:
             if not batch or total is None or len(items) >= total:
                 return response, items
         return response, None
-
-    # -- writes ------------------------------------------------------------
-
-    def create_pull_request(self, slug: str, head_branch: str, base: str,
-                            title: str, body: str,
-                            draft: bool = False) -> PullRequest:
-        """Open a PR, or return the one that is already open for this branch."""
-        self._require_token()
-
-        existing = self.find_pull_request(slug, head_branch, base)
-        if existing:
-            log.info("pull request already open for %s: %s", head_branch,
-                     existing.url)
-            return existing
-
-        response = self._request(
-            "POST", f"/repos/{slug}/pulls",
-            json={
-                "title": title, "body": body, "head": head_branch,
-                "base": base, "draft": draft,
-            },
-        )
-        if _rate_limited(response):
-            raise _rate_limit_error(response)
-        if response.status_code == 401:
-            raise GitHubError(
-                ErrorCode.AUTH_REQUIRED,
-                "GitHub rejected the token. Check it is valid and, if the "
-                "organisation uses SAML, that it is SSO-authorised.",
-            )
-        if response.status_code == 403:
-            raise GitHubError(
-                ErrorCode.AUTH_REQUIRED,
-                f"The token is not permitted to open pull requests on {slug}.",
-                _message(response),
-            )
-        if response.status_code == 404:
-            raise GitHubError(
-                ErrorCode.NOT_FOUND,
-                f"{slug} was not found. For a private repository this is what "
-                f"an unauthorised token looks like, so check the token's scope "
-                f"before the spelling.",
-            )
-        if response.status_code >= 400:
-            raise GitHubError(
-                ErrorCode.INTERNAL,
-                f"GitHub refused the pull request: {_message(response)}",
-                response.text[:400],
-            )
-        return _to_pull_request(response.json())
 
 
 def build_patch_pr_body(resolution: UpstreamResolution,

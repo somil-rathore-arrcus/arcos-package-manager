@@ -15,6 +15,7 @@ from apm.api.main import create_app
 from apm.domain.enums import (
     CommitClass, Criticality, ErrorCode, PreviewOutcome, PublishStatus,
     ResolutionMethod, ResolutionMode, ResolutionStatus, UpstreamMdOutcome,
+    VerificationLevel,
 )
 from apm.domain.models import (
     Branch, CherryPickPreview, CherryPickResult, CommitInfo, ComparisonResult,
@@ -24,9 +25,8 @@ from apm.domain.models import (
 )
 from apm.services.comparison_service import ComparisonError
 from apm.services.metadata_batch_service import MetadataBatchService
-from apm.services.github_service import GitHubError
 from apm.services.patch_service import PatchError
-from apm.services.upstream_md_publisher import validate_branch
+from apm.services.upstream_md_publisher import sha256_text
 from apm.services.upstream_service import UpstreamServiceError
 
 
@@ -149,20 +149,16 @@ class FakePatches:
 
 
 class FakeGitHub:
+    """Lookups only, as the real client: there is no method that opens a pull
+    request, so a route calling one would fail; `created` stays empty."""
+
     def __init__(self, token="tok"):
         self.token = token
         self.created = []
 
     @property
-    def can_create_pull_requests(self):
+    def has_token(self):
         return bool(self.token)
-
-    def create_pull_request(self, slug, head, base, title, body, draft=False):
-        if not self.token:
-            raise GitHubError(ErrorCode.AUTH_REQUIRED, "token required")
-        self.created.append((slug, head, base))
-        return PullRequest(number=1, url="https://github.com/o/r/pull/1",
-                           title=title, base=base, head=head)
 
     def get_pull_request(self, slug, number):
         return PullRequest(number=number, url=f"https://github.com/o/r/pull/{number}")
@@ -202,38 +198,33 @@ class FakePublisher:
 
     def __init__(self):
         self.calls = []
-        self.preflights = []
-        self.push_only_preflights = []
+        self.preflights = 0
+        self.exclude = {}
 
-    def preflight(self, slugs, push_only=False):
-        (self.push_only_preflights if push_only else self.preflights).append(
-            list(slugs))
+    def preflight(self, push_only=True):
+        self.preflights += 1
 
-    def publish(self, target, *, apply, draft=False, title_prefix="",
-                branch=None, prior=None, push_only=False, others=()):
-        validate_branch(branch or "upstream-metadata/bookworm/x", target.base_branch)
+    def publish(self, target, *, apply, title_prefix="", prior=None,
+                push_only=True, others=()):
         self.calls.append({"package": target.package, "apply": apply,
-                           "branch": branch, "content": target.content,
-                           "push_only": push_only})
-        branch = branch or f"upstream-metadata/bookworm/{target.package}"
-        if push_only:
-            return PublishResult(
-                package=target.package, release=target.release,
-                status=PublishStatus.BRANCH_PUSHED if apply
-                else PublishStatus.DRY_RUN_OK,
-                repository=target.slug, base_branch=target.base_branch,
-                branch=branch, pushed=apply,
-                pr_create_url=f"https://github.com/{target.slug}/compare/"
-                              f"{target.base_branch}...{branch}?quick_pull=1",
-            )
+                           "content": target.content, "base": target.base_branch})
+        branch = "debian-upstream-tracking"
         return PublishResult(
             package=target.package, release=target.release,
-            status=PublishStatus.PR_OPENED if apply else PublishStatus.DRY_RUN_OK,
+            status=PublishStatus.BRANCH_PUSHED if apply else PublishStatus.DRY_RUN_OK,
             repository=target.slug, base_branch=target.base_branch,
-            branch=branch,
-            pull_request=PullRequest(number=1, url="https://github.com/o/r/pull/1")
-            if apply else None,
+            branch=branch, pushed=apply, commit="c" * 40,
+            pr_create_url=f"https://github.com/{target.slug}/compare/"
+                          f"{target.base_branch}...{branch}?quick_pull=1",
         )
+
+
+class FakeMapping:
+    def __init__(self, rows=None):
+        self.rows = rows or {}
+
+    def get(self, package, release):
+        return self.rows.get(package)
 
 
 class FakeUpstreamMd:
@@ -278,12 +269,14 @@ class FakeContainer:
             self.upstream_md, workspaces=self.workspaces
         )
         self.publisher = FakePublisher()
+        self.mapping = FakeMapping()
         from apm.services.publish_status import PublishStatusService
         self.refs = FakeRefs()
         self.publish_status = PublishStatusService(self.refs, self.github)
 
     def capabilities(self):
-        return {"create_pull_requests": self.github.can_create_pull_requests}
+        return {"create_pull_requests": False, "pull_requests": "never",
+                "push_enabled": True}
 
 
 @pytest.fixture
@@ -298,7 +291,8 @@ def test_health_reports_capabilities(app_container):
     client, _ = app_container
     body = client.get("/api/health").json()
     assert body["status"] == "ok"
-    assert "create_pull_requests" in body["capabilities"]
+    assert body["capabilities"]["create_pull_requests"] is False
+    assert body["capabilities"]["pull_requests"] == "never"
 
 
 def test_releases_and_packages_are_discovered(app_container):
@@ -435,29 +429,19 @@ def test_cherry_pick_onto_the_target_branch_is_rejected(app_container):
     assert response.status_code == 400
 
 
-def test_pull_request_creation_requires_a_token(app_container):
+@pytest.mark.parametrize("token", ["tok", ""])
+def test_no_pull_request_can_be_opened_through_the_api(app_container, token):
     client, fake = app_container
-    fake.github.token = ""
-    response = client.post("/api/pull-requests", json={
-        "package": "pyrad", "release": "bookworm", "arcos_branch": "aminor",
-        "head_branch": "upstream/pyrad/x",
-    })
-    assert response.status_code == 401
-    assert response.json()["code"] == "AUTH_REQUIRED"
-
-
-def test_pull_request_is_created_only_on_an_explicit_call(app_container):
-    client, fake = app_container
-    # Resolving and comparing must not have created anything.
-    client.get("/api/upstream/pyrad", params={"release": "bookworm"})
-    client.post("/api/comparison", json={"package": "pyrad", "release": "bookworm"})
+    fake.github.token = token
+    fake.api_token = SECRET
+    for headers in ({}, {"Authorization": f"Bearer {SECRET}"}):
+        response = client.post("/api/pull-requests", json={
+            "package": "pyrad", "release": "bookworm", "arcos_branch": "aminor",
+            "head_branch": "upstream/pyrad/x", "applied": ["a" * 40],
+        }, headers=headers)
+        assert response.status_code == 403
+        assert response.json()["code"] == "PULL_REQUESTS_DISABLED"
     assert fake.github.created == []
-
-    client.post("/api/pull-requests", json={
-        "package": "pyrad", "release": "bookworm", "arcos_branch": "aminor",
-        "head_branch": "upstream/pyrad/x", "applied": ["a" * 40],
-    })
-    assert len(fake.github.created) == 1
 
 
 def test_upstream_md_generation_writes_nothing_remote(app_container):
@@ -479,28 +463,61 @@ def test_upstream_md_pr_requires_confirmation(app_container):
 
 
 @pytest.fixture
-def md_out(tmp_path, monkeypatch):
+def md_out(tmp_path, monkeypatch, app_container):
+    """A reviewed bookworm plan for pyrad, as generate-upstream-md writes it,
+    with babeltrace and arcapi among the packages it settles."""
     from apm.api.routes import upstream_md as md_route
 
     monkeypatch.setattr(md_route, "OUT_DIR", tmp_path)
+    _, fake = app_container
+    _write_plan(tmp_path, {"pyrad": "# pyrad\n"}, skipped=[
+        {"package": "babeltrace", "status": "NEEDS_REVIEW", "reason": "imported"},
+        {"package": "arcapi", "status": "NO_UPSTREAM", "reason": "arrcus native"},
+    ])
+    fake.mapping = FakeMapping({"pyrad": RESOLUTION.model_copy(
+        update={"verification_level": VerificationLevel.SHARED_HISTORY})})
     return tmp_path
 
 
-def test_upstream_md_pr_goes_through_the_publisher_and_is_recorded(
-        app_container, md_out):
+def _write_plan(out, files, release="bookworm", skipped=(), base="aminor"):
+    entries = []
+    for package, content in files.items():
+        path = out / f"upstream-md-{release}" / package / "debian" / "upstream.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        entries.append({"package": package, "status": "VERIFIED",
+                        "arcos_repository": f"Arrcus/{package}",
+                        "base_branch": base, "sha256": sha256_text(content)})
+    import json
+
+    (out / f"upstream-md-plan-{release}.json").write_text(json.dumps({
+        "release": release, "entries": entries, "skipped": list(skipped)}))
+
+
+@pytest.mark.parametrize("token", ["tok", ""])
+def test_upstream_md_push_goes_through_the_reviewed_plan_and_is_recorded(
+        app_container, md_out, token):
     client, fake = app_container
+    fake.github.token = token
     body = client.post("/api/upstream-md/pr", json={
         "package": "pyrad", "release": "bookworm", "confirm": True,
     }).json()
-    assert body["status"] == "PR_OPENED"
-    assert body["pull_request"]["url"] == "https://github.com/o/r/pull/1"
-    assert fake.publisher.preflights == [["Arrcus/pyrad"]]
+    assert body["status"] == "BRANCH_PUSHED" and body["pull_request"] is None
+    assert body["compare_url"] == \
+        "https://github.com/Arrcus/pyrad/compare/aminor...debian-upstream-tracking"
+    assert body["file_url"] == ("https://github.com/Arrcus/pyrad/blob/"
+                                "debian-upstream-tracking/debian/upstream.md")
+    assert fake.publisher.preflights == 1
     assert fake.publisher.calls == [{"package": "pyrad", "apply": True,
-                                     "branch": None, "content": "# pyrad\n",
-                                     "push_only": False}]
+                                     "content": "# pyrad\n", "base": "aminor"}]
+    assert fake.github.created == []
 
     listed = client.get("/api/upstream-md/prs", params={"release": "bookworm"})
     assert [e["package"] for e in listed.json()] == ["pyrad"]
+    # What a person works from is rewritten after every push.
+    assert body["compare_url"] in (md_out / "upstream-md-pr-links-bookworm.md").read_text()
+    report = (md_out / "upstream-md-publishing-report.md").read_text()
+    assert body["compare_url"] in report and body["file_url"] in report
 
 
 def test_upstream_md_dry_run_needs_no_confirmation_and_records_nothing(
@@ -511,30 +528,9 @@ def test_upstream_md_dry_run_needs_no_confirmation_and_records_nothing(
     }).json()
     assert body["status"] == "DRY_RUN_OK"
     assert fake.publisher.calls[0]["apply"] is False
-    assert fake.publisher.preflights == []
+    assert fake.publisher.preflights == 0
     assert client.get("/api/upstream-md/prs").json() == []
-
-
-def test_upstream_md_push_only_needs_no_token_and_is_recorded(app_container,
-                                                              md_out):
-    client, fake = app_container
-    fake.github.token = ""
-
-    body = client.post("/api/upstream-md/pr", json={
-        "package": "pyrad", "release": "bookworm", "confirm": True,
-        "push_only": True,
-    }).json()
-
-    assert body["status"] == "BRANCH_PUSHED"
-    assert body["pull_request"] is None
-    assert body["pr_create_url"].startswith(
-        "https://github.com/Arrcus/pyrad/compare/aminor...upstream-metadata/")
-    assert fake.publisher.push_only_preflights == [["Arrcus/pyrad"]]
-    assert fake.publisher.preflights == []
-    assert fake.publisher.calls[0]["push_only"] is True
-    assert fake.github.created == []
-    listed = client.get("/api/upstream-md/prs", params={"release": "bookworm"})
-    assert [e["status"] for e in listed.json()] == ["BRANCH_PUSHED"]
+    assert not (md_out / "upstream-md-publishing-report.md").exists()
 
 
 def test_upstream_md_push_only_still_needs_confirmation(app_container, md_out):
@@ -543,126 +539,171 @@ def test_upstream_md_push_only_still_needs_confirmation(app_container, md_out):
         "package": "pyrad", "release": "bookworm", "push_only": True,
     })
     assert response.status_code == 400
-    assert fake.publisher.calls == [] and fake.publisher.push_only_preflights == []
+    assert fake.publisher.calls == [] and fake.publisher.preflights == 0
 
 
-def test_upstream_md_push_only_dry_run_returns_the_link_and_records_nothing(
-        app_container, md_out):
+def test_asking_the_api_for_a_pull_request_is_refused(app_container, md_out):
     client, fake = app_container
-    body = client.post("/api/upstream-md/pr", json={
-        "package": "pyrad", "release": "bookworm", "push_only": True,
-        "dry_run": True,
-    }).json()
-    assert body["status"] == "DRY_RUN_OK" and body["pr_create_url"]
-    assert fake.publisher.calls[0] == {
-        "package": "pyrad", "apply": False, "branch": None,
-        "content": "# pyrad\n", "push_only": True,
-    }
-    assert fake.publisher.preflights == fake.publisher.push_only_preflights == []
-    assert client.get("/api/upstream-md/prs").json() == []
+    for dry_run in (False, True):
+        response = client.post("/api/upstream-md/pr", json={
+            "package": "pyrad", "release": "bookworm", "confirm": True,
+            "dry_run": dry_run, "push_only": False,
+        })
+        assert response.status_code == 403
+        assert response.json()["code"] == "PULL_REQUESTS_DISABLED"
+    assert fake.publisher.calls == [] and fake.publisher.preflights == 0
 
 
-def test_upstream_md_push_only_through_the_real_publisher(app_container, md_out,
-                                                          tmp_path):
-    """Route and publisher together: no token, one push, no pull request."""
+def _real_publisher(app_container, md_out, tmp_path, github):
+    """Route and real publisher on a local fork, from a reviewed plan."""
     from apm.services.upstream_md_publisher import UpstreamMdPublisher
     from apm.services.upstream_md_service import UpstreamMdService
     from test_upstream_md_publisher import (
-        FakeGitHub as RecordingGitHub, FakeWorkspaces as RecordingWorkspaces,
-        Remote, _resolution,
+        FakeWorkspaces as RecordingWorkspaces, Remote, _resolution,
     )
 
-    client, fake = app_container
+    _, fake = app_container
     remote = Remote(tmp_path / "remote")
     resolution = _resolution(remote=remote)
-    github = RecordingGitHub(token="")
-    fake.upstream.resolve = lambda *args, **kwargs: resolution.model_copy(deep=True)
     fake.upstream_md = UpstreamMdService()
+    fake.mapping = FakeMapping({"mstpd": resolution})
+    _write_plan(md_out, {"mstpd": fake.upstream_md.render(resolution)})
     fake.publisher = UpstreamMdPublisher(
         RecordingWorkspaces(tmp_path / "ws"), github, "a", "a@b",
+        branch_template="debian-upstream-tracking",
     )
+    return remote
 
-    # Without push_only, no token still refuses before anything is pushed.
-    refused = client.post("/api/upstream-md/pr", json={
-        "package": "mstpd", "release": "bookworm", "confirm": True,
-    })
-    assert refused.status_code == 401
+
+def test_upstream_md_push_through_the_real_publisher(app_container, md_out,
+                                                     tmp_path):
+    """No token, one push, no pull request - and only where pushing is allowed."""
+    from test_upstream_md_publisher import FakeGitHub as RecordingGitHub
+
+    client, fake = app_container
+    github = RecordingGitHub(token="")
+    remote = _real_publisher(app_container, md_out, tmp_path, github)
+    push = {"package": "mstpd", "release": "bookworm", "confirm": True}
+
+    fake.publisher.workspaces.allow_push = False
+    refused = client.post("/api/upstream-md/pr", json=push)
+    assert refused.status_code == 403 and refused.json()["code"] == "PUSH_DISABLED"
     assert remote.branches() == ["aminor"]
+    fake.publisher.workspaces.allow_push = True
 
-    body = client.post("/api/upstream-md/pr", json={
-        "package": "mstpd", "release": "bookworm", "confirm": True,
-        "push_only": True,
-    }).json()
+    body = client.post("/api/upstream-md/pr", json=push).json()
 
     assert body["status"] == "BRANCH_PUSHED", body
-    assert remote.branches() == ["aminor", "upstream-metadata/bookworm/mstpd"]
+    assert remote.branches() == ["aminor", "debian-upstream-tracking"]
     assert fake.publisher.workspaces.pushes == [
-        (body["commit"], "upstream-metadata/bookworm/mstpd")]
-    assert "/compare/aminor...upstream-metadata/bookworm/mstpd?quick_pull=1&title=" \
+        (body["commit"], "debian-upstream-tracking")]
+    assert "/compare/aminor...debian-upstream-tracking?quick_pull=1&title=" \
         in body["pr_create_url"]
+    assert body["compare_url"].endswith("/compare/aminor...debian-upstream-tracking")
+    assert body["file_url"].endswith("/blob/debian-upstream-tracking/debian/upstream.md")
     assert github.created == [] and github.lookups == [] and github.repos == []
     [entry] = client.get("/api/upstream-md/prs").json()
     assert entry["pr_create_url"] == body["pr_create_url"]
 
+    # Again: the same branch and link, never a second branch.
+    again = client.post("/api/upstream-md/pr", json=push).json()
+    assert (again["status"], again["commit"]) == ("BRANCH_PUSHED", body["commit"])
+    assert len(fake.publisher.workspaces.pushes) == 1
 
-def test_upstream_md_push_only_leaves_a_recorded_pull_request_alone(
+
+def test_upstream_md_push_leaves_a_recorded_pull_request_alone(
         app_container, md_out, tmp_path):
-    """Push-only over a package whose PR is open: no push, no link, no
-    downgrade of the ledger to BRANCH_PUSHED."""
-    from apm.services.upstream_md_publisher import UpstreamMdPublisher
-    from apm.services.upstream_md_service import UpstreamMdService
-    from test_upstream_md_publisher import (
-        FakeGitHub as RecordingGitHub, FakeWorkspaces as RecordingWorkspaces,
-        Remote, _resolution,
-    )
+    """A package whose PR is open: no push, no link, no downgrade of the
+    record to BRANCH_PUSHED."""
+    from apm.services.publish_ledger import PublishLedger
+    from test_upstream_md_publisher import FakeGitHub as RecordingGitHub
 
     client, fake = app_container
-    remote = Remote(tmp_path / "remote")
-    resolution = _resolution(remote=remote)
     github = RecordingGitHub()
-    fake.upstream.resolve = lambda *args, **kwargs: resolution.model_copy(deep=True)
-    fake.upstream_md = UpstreamMdService()
-    fake.publisher = UpstreamMdPublisher(
-        RecordingWorkspaces(tmp_path / "ws"), github, "a", "a@b",
-    )
-    opened = client.post("/api/upstream-md/pr", json={
-        "package": "mstpd", "release": "bookworm", "confirm": True,
-    }).json()
-    assert opened["status"] == "PR_OPENED"
+    _real_publisher(app_container, md_out, tmp_path, github)
+    push = {"package": "mstpd", "release": "bookworm", "confirm": True}
+    pushed = client.post("/api/upstream-md/pr", json=push).json()
+    assert pushed["status"] == "BRANCH_PUSHED"
+    # A person opened it from the link, and a later run found it.
+    ledger = PublishLedger.for_release(md_out, "bookworm")
+    ledger.record(ledger.get("mstpd").model_copy(update={
+        "status": PublishStatus.PR_EXISTS, "pull_request": PullRequest(
+            number=12, state="open", url="https://github.com/Arrcus/mstpd/pull/12"),
+    }))
 
     for token in ("tok", ""):
         github.token = token
-        body = client.post("/api/upstream-md/pr", json={
-            "package": "mstpd", "release": "bookworm", "confirm": True,
-            "push_only": True,
-        }).json()
-        assert body["status"] == "PR_OPENED", body
-        assert body["pull_request"]["url"] == opened["pull_request"]["url"]
-        assert body["pr_create_url"] is None
+        body = client.post("/api/upstream-md/pr", json=push).json()
+        assert body["status"] == "PR_EXISTS", body
+        assert body["pull_request"]["url"].endswith("/pull/12")
 
-    assert len(fake.publisher.workspaces.pushes) == 1 and len(github.created) == 1
+    assert len(fake.publisher.workspaces.pushes) == 1 and github.created == []
     [entry] = client.get("/api/upstream-md/prs").json()
-    assert entry["status"] == "PR_OPENED"
-    assert entry["pull_request"]["url"] == opened["pull_request"]["url"]
+    assert entry["status"] == "PR_EXISTS"
 
 
-@pytest.mark.parametrize("package", ["babeltrace", "arcapi"])
-def test_upstream_md_pr_refuses_unverified_mappings(app_container, md_out, package):
+@pytest.mark.parametrize("package,status", [
+    ("babeltrace", "SKIPPED_NEEDS_REVIEW"), ("arcapi", "SKIPPED_NO_UPSTREAM"),
+])
+def test_upstream_md_push_refuses_what_the_plan_settles(app_container, md_out,
+                                                        package, status):
     client, fake = app_container
-    response = client.post("/api/upstream-md/pr", json={
-        "package": package, "release": "bookworm", "confirm": True,
-    })
-    assert response.status_code == 400
+    for dry_run in (False, True):
+        body = client.post("/api/upstream-md/pr", json={
+            "package": package, "release": "bookworm", "confirm": True,
+            "dry_run": dry_run,
+        }).json()
+        assert body["status"] == status and body["pushed"] is False
+    assert fake.publisher.calls == []
+    assert client.get("/api/upstream-md/prs").json() == []
+
+
+def test_a_package_outside_the_reviewed_plan_cannot_be_pushed(app_container,
+                                                              md_out):
+    client, fake = app_container
+    for dry_run in (False, True):
+        response = client.post("/api/upstream-md/pr", json={
+            "package": "zenoh", "release": "bookworm", "confirm": True,
+            "dry_run": dry_run,
+        })
+        assert response.status_code == 400
+        assert "not in the reviewed bookworm plan" in response.json()["message"]
+    missing = client.post("/api/upstream-md/pr", json={
+        "package": "pyrad", "release": "trixie", "confirm": True})
+    assert missing.status_code == 404
     assert fake.publisher.calls == []
 
 
-def test_upstream_md_pr_refuses_the_target_branch(app_container, md_out):
-    client, _ = app_container
-    response = client.post("/api/upstream-md/pr", json={
-        "package": "pyrad", "release": "bookworm", "confirm": True,
-        "branch_name": "aminor",
-    })
-    assert response.status_code == 400
+def test_a_reviewed_file_changed_since_review_is_drift_not_a_push(app_container,
+                                                                  md_out):
+    client, fake = app_container
+    (md_out / "upstream-md-bookworm" / "pyrad" / "debian" / "upstream.md") \
+        .write_text("# pyrad, edited after review\n")
+    for dry_run in (False, True):
+        body = client.post("/api/upstream-md/pr", json={
+            "package": "pyrad", "release": "bookworm", "confirm": True,
+            "dry_run": dry_run,
+        }).json()
+        assert body["status"] == "DRIFT", body
+    assert fake.publisher.calls == []
+
+
+@pytest.mark.parametrize("field", [
+    {"branch_name": "aminor"}, {"branch_name": "debian-upstream-tracking-x"},
+    {"branch_name": "upstream-metadata/bookworm/pyrad"},
+    {"arcos_branch": "aminor-trixie"}, {"arcos_branch": "aminor"},
+    {"draft": True},
+])
+def test_a_request_cannot_name_the_branch_or_the_target(app_container, md_out,
+                                                        field):
+    client, fake = app_container
+    for dry_run in (False, True):
+        response = client.post("/api/upstream-md/pr", json={
+            "package": "pyrad", "release": "bookworm", "confirm": True,
+            "dry_run": dry_run, **field,
+        })
+        assert response.status_code == 422, response.text
+    assert fake.publisher.calls == [] and fake.publisher.preflights == 0
 
 
 def test_upstream_md_generation_for_no_upstream_is_a_400_not_a_500(app_container):
@@ -777,8 +818,6 @@ PICK = {
     "upstream_ref": "master", "shas": ["a" * 40], "expected_base_sha": "b" * 40,
 }
 SECRET = "Zq9-api-secret"
-PR = {"package": "pyrad", "release": "bookworm", "arcos_branch": "aminor",
-      "head_branch": "upstream/pyrad/x", "applied": ["a" * 40]}
 
 
 @pytest.mark.parametrize("headers", [
@@ -790,10 +829,9 @@ def test_writes_need_the_api_token_when_one_is_set(app_container, headers):
     fake.api_token = SECRET
 
     for path, body in [
-        ("/api/pull-requests", PR),
         ("/api/patches/cherry-pick", {**PICK, "push": True}),
         ("/api/upstream-md/pr", {"package": "pyrad", "release": "bookworm",
-                                 "confirm": True, "push_only": True}),
+                                 "confirm": True}),
         ("/api/upstream/content-base/approve",
          {"package": "pyrad", "release": "bookworm", "tag": "v1",
           "verified_by": "Somil", "confirm": True}),
@@ -807,18 +845,21 @@ def test_writes_need_the_api_token_when_one_is_set(app_container, headers):
     assert fake.github.created == [] and fake.publisher.calls == []
 
 
-def test_the_right_api_token_lets_a_write_through(app_container):
+def test_the_right_api_token_lets_a_write_through(app_container, md_out):
     client, fake = app_container
     fake.api_token = SECRET
+    headers = {"Authorization": f"Bearer {SECRET}"}
 
-    response = client.post("/api/pull-requests", json=PR,
-                           headers={"Authorization": f"Bearer {SECRET}"})
+    picked = client.post("/api/patches/cherry-pick", json={**PICK, "push": True},
+                         headers=headers)
+    pushed = client.post("/api/upstream-md/pr", headers=headers, json={
+        "package": "pyrad", "release": "bookworm", "confirm": True})
 
-    assert response.status_code == 200, response.text
-    assert len(fake.github.created) == 1
+    assert picked.status_code == 200 and picked.json()["pushed"] is True
+    assert pushed.status_code == 200 and pushed.json()["status"] == "BRANCH_PUSHED"
 
 
-def test_reads_and_dry_runs_never_need_the_api_token(app_container):
+def test_reads_and_dry_runs_never_need_the_api_token(app_container, md_out):
     client, fake = app_container
     fake.api_token = SECRET
 
@@ -831,7 +872,8 @@ def test_reads_and_dry_runs_never_need_the_api_token(app_container):
 
 def test_without_an_api_token_writes_behave_as_before(app_container):
     client, fake = app_container
-    assert client.post("/api/pull-requests", json=PR).status_code == 200
+    assert client.post("/api/patches/cherry-pick",
+                       json={**PICK, "push": True}).json()["pushed"] is True
 
 
 def test_cors_is_refused_for_every_origin(monkeypatch):

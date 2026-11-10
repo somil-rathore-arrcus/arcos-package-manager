@@ -138,6 +138,10 @@ class Environment:
     # Required, when set, on every request that writes: a push, a pull request
     # or an approval. Unset, the API is as open as the network it listens on.
     api_token: str = ""
+    # Whether this machine may push. Off unless APM_ALLOW_PUSH says otherwise,
+    # and set only on the machine that holds the ARCoS git access, so a copy
+    # of the application started anywhere else can compare but never push.
+    allow_push: bool = False
     cache_dir: Path = Path("~/.cache/arcos-package-manager")
     workspace_dir: str = ""
     cache_ttl: int = 86400
@@ -179,6 +183,7 @@ class Environment:
             ),
             github_token=env.get("APM_GITHUB_TOKEN", ""),
             api_token=env.get("APM_API_TOKEN", ""),
+            allow_push=_flag(env.get("APM_ALLOW_PUSH", "")),
             github_api_url=env.get("APM_GITHUB_API_URL", "https://api.github.com"),
             cache_dir=Path(
                 env.get("APM_CACHE_DIR", "~/.cache/arcos-package-manager")
@@ -224,9 +229,15 @@ class Environment:
             "ssh_password_set": bool(self.ssh.password),
             "github_token_set": bool(self.github_token),
             "api_token_set": bool(self.api_token),
+            "allow_push": self.allow_push,
             "git_ssh_identity_set": bool(self.git_ssh_identity_file),
             "cache_dir": str(self.cache_dir),
         }
+
+
+def _flag(raw: str) -> bool:
+    """APM_ALLOW_PUSH=1 (or true/yes/on); anything else, including unset, is off."""
+    return (raw or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _split(raw: str) -> List[str]:

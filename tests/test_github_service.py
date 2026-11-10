@@ -42,68 +42,33 @@ def test_repo_slug(url, expected):
     assert repo_slug(url) == expected
 
 
-def test_create_pull_request_returns_the_url():
+@pytest.mark.parametrize("token", ["tok", ""])
+def test_no_pull_request_can_be_opened_whatever_the_token(token):
+    """The client has no method that opens one, and refuses any request that
+    is not a read before it reaches the network."""
     def handler(request):
-        if request.method == "GET":
-            return httpx.Response(200, json=[])
-        return httpx.Response(201, json=PR_PAYLOAD)
+        raise AssertionError(f"must not reach GitHub: {request.method} {request.url}")
 
-    pr = _service(handler).create_pull_request(
-        "o/r", "upstream/demo/1", "aminor", "t", "b"
-    )
-    assert pr.url == "https://github.com/o/r/pull/7"
-    assert pr.number == 7
-    assert pr.already_existed is False
-
-
-def test_an_existing_pull_request_is_reused_not_duplicated():
-    calls = []
-
-    def handler(request):
-        calls.append(request.method)
-        if request.method == "GET":
-            return httpx.Response(200, json=[PR_PAYLOAD])
-        raise AssertionError("must not POST when a PR is already open")
-
-    pr = _service(handler).create_pull_request(
-        "o/r", "upstream/demo/1", "aminor", "t", "b"
-    )
-    assert pr.already_existed is True
-    assert "POST" not in calls
+    service = _service(handler, token=token)
+    assert not hasattr(service, "create_pull_request")
+    assert not hasattr(service, "can_create_pull_requests")
+    for method in ("POST", "PUT", "PATCH", "DELETE"):
+        with pytest.raises(GitHubError) as excinfo:
+            service._request(method, "/repos/Arrcus/mstpd/pulls", json={})
+        assert excinfo.value.code is ErrorCode.PULL_REQUESTS_DISABLED
 
 
-def test_without_a_token_creating_a_pr_is_refused_before_any_request():
-    def handler(request):
-        raise AssertionError("must not call GitHub without a token")
+def test_the_github_client_only_ever_reads():
+    """Every request in the module is a GET; nothing writes to GitHub."""
+    import re
+    from pathlib import Path
 
-    service = _service(handler, token="")
-    assert service.can_create_pull_requests is False
-    with pytest.raises(GitHubError) as excinfo:
-        service.create_pull_request("o/r", "h", "b", "t", "body")
-    assert excinfo.value.code is ErrorCode.AUTH_REQUIRED
+    import apm.services.github_service as module
 
-
-def test_401_is_reported_as_auth_required():
-    def handler(request):
-        if request.method == "GET":
-            return httpx.Response(200, json=[])
-        return httpx.Response(401, json={"message": "Bad credentials"})
-
-    with pytest.raises(GitHubError) as excinfo:
-        _service(handler).create_pull_request("o/r", "h", "b", "t", "body")
-    assert excinfo.value.code is ErrorCode.AUTH_REQUIRED
-
-
-def test_404_explains_that_private_repos_look_like_this():
-    def handler(request):
-        if request.method == "GET":
-            return httpx.Response(200, json=[])
-        return httpx.Response(404, json={"message": "Not Found"})
-
-    with pytest.raises(GitHubError) as excinfo:
-        _service(handler).create_pull_request("o/r", "h", "b", "t", "body")
-    assert excinfo.value.code is ErrorCode.NOT_FOUND
-    assert "token" in str(excinfo.value).lower()
+    source = Path(module.__file__).read_text()
+    methods = set(re.findall(r'_request\(\s*"([A-Z]+)"', source))
+    assert methods == {"GET"}
+    assert "/merge" not in source
 
 
 def test_pr_body_lists_commits_with_their_evidence():
@@ -428,16 +393,6 @@ def test_a_spent_quota_is_a_rate_limit_not_a_bad_token(status, headers, message)
             call()
         assert excinfo.value.code is ErrorCode.RATE_LIMITED
         assert "retry" in str(excinfo.value)
-
-
-def test_creating_a_pull_request_on_a_spent_quota_is_a_rate_limit():
-    def handler(request):
-        if request.method == "GET":
-            return httpx.Response(200, json=[])
-        return httpx.Response(429, json={"message": "Too Many Requests"})
-    with pytest.raises(GitHubError) as excinfo:
-        _service(handler).create_pull_request("Arrcus/mstpd", "b", "aminor", "t", "b")
-    assert excinfo.value.code is ErrorCode.RATE_LIMITED
 
 
 def test_reading_a_pull_request_needs_a_token():

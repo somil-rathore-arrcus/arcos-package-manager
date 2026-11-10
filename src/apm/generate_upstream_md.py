@@ -3,8 +3,8 @@
     PYTHONPATH=src python -m apm.generate_upstream_md --release bookworm \\
         --branch aminor
 
-Files are written under out/upstream-md/<package>/debian/upstream.md and a
-branch/commit plan is written beside them. Nothing is pushed and no pull request
+Files are written under out/upstream-md-<release>/<package>/debian/upstream.md
+and a branch/commit plan is written beside them. Nothing is pushed and no pull request
 is opened: this command has no write access to any remote and does not ask for
 a GitHub token.
 
@@ -26,6 +26,7 @@ from pathlib import Path
 
 from .config import ROOT
 from .services.container import Container
+from .services.upstream_md_service import review_dir
 
 log = logging.getLogger("apm")
 
@@ -35,7 +36,7 @@ def run(release: str = "bookworm", branch: str = "", out_dir: Path = None,
         read_remote: bool = True) -> int:
     container = Container()
     out_dir = Path(out_dir or ROOT / "out")
-    md_dir = out_dir / "upstream-md"
+    md_dir = review_dir(out_dir, release)
 
     resolutions = [
         r for r in container.mapping.all() if r.debian_release == release
