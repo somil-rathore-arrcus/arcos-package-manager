@@ -96,6 +96,11 @@ class Settings:
         block = self.raw.get("upstream_md_publish", {}) or {}
         return {
             "branch_template": block.get("branch_template", ""),
+            "release_branch_templates": {
+                str(k): str(v)
+                for k, v in (block.get("release_branch_templates") or {}).items()
+                if v
+            },
             "exclude": {
                 str(k): " ".join(str(v or "excluded in settings.yaml").split())
                 for k, v in (block.get("exclude") or {}).items()

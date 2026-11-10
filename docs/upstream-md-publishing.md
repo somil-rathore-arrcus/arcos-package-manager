@@ -139,20 +139,27 @@ the package.
 `upstream_md_publish.branch_template` in `config/settings.yaml` names the
 branch. It is `debian-upstream-tracking`, the name Lakshya asked for
 (2026-10-29): one branch in each package repository, pushed for review.
+`upstream_md_publish.release_branch_templates` gives a release its own name:
+trixie uses `debian-upstream-tracking-trixie` (decided 2026-11-10), so a
+repository carries its aminor and aminor-trixie proposals side by side.
 
 | Convention | Example | Scope |
 |---|---|---|
-| `debian-upstream-tracking` (current) | `debian-upstream-tracking` | the whole repository |
+| `debian-upstream-tracking` (current, bookworm) | `debian-upstream-tracking` | the whole repository |
+| `debian-upstream-tracking-<release>` (current, trixie) | `debian-upstream-tracking-trixie` | the whole repository, one release |
 | `upstream-metadata/{release}/{package}` (earlier) | `upstream-metadata/bookworm/mstpd` | one release and package |
 
-The publisher refuses any branch outside these two conventions - also
-`debian-upstream-tracking/...` - and any name equal to the target, whatever
-the settings say; a bad template stops the service at start-up.
+The publisher refuses any branch outside these conventions - also
+`debian-upstream-tracking/...` and a suffix of fewer than three lowercase
+characters - and any name equal to the target, whatever the settings say; a
+bad template stops the service at start-up.
 
 - **Branches already pushed keep their name.** A package whose ledger records
   a pushed branch or a pull request goes on using that branch, so changing the
   template never leaves a second branch with the same file beside the first.
-  `mstpd`'s `upstream-metadata/bookworm/mstpd` is one.
+  `mstpd`'s `upstream-metadata/bookworm/mstpd` is one, and its trixie
+  proposal, pushed before the trixie name existed, stays on
+  `debian-upstream-tracking`.
 - **One proposal per repository at a time.** `debian-upstream-tracking` names
   neither the release nor the package. When the branch already holds another
   release's or package's proposal, the package ends `BRANCH_EXISTS` and names

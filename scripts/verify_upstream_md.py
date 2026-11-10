@@ -27,9 +27,11 @@ from typing import Dict, List, Optional
 
 
 def metadata_branch(name: str) -> bool:
-    """debian-upstream-tracking, or a name under it or upstream-metadata/: the
-    publisher's rule, restated rather than imported."""
-    return name == "debian-upstream-tracking" or any(
+    """debian-upstream-tracking, debian-upstream-tracking-<release>, or a name
+    under debian-upstream-tracking/ or upstream-metadata/: the publisher's rule,
+    restated rather than imported."""
+    return name == "debian-upstream-tracking" or bool(
+        re.fullmatch(r"debian-upstream-tracking-[a-z][a-z0-9]{2,}", name)) or any(
         name.startswith(prefix) and len(name) > len(prefix)
         for prefix in ("debian-upstream-tracking/", "upstream-metadata/"))
 

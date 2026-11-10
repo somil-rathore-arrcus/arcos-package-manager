@@ -67,6 +67,10 @@ TRACKING_BRANCH = "debian-upstream-tracking"
 # there cannot point a push at a release branch: anything under
 # upstream-metadata/, and debian-upstream-tracking itself or anything under it.
 _NAMESPACES = (BRANCH_PREFIX, TRACKING_BRANCH + "/")
+# debian-upstream-tracking-<release>: the second release's branch in a
+# repository whose debian-upstream-tracking already carries the first release's
+# proposal. git cannot hold debian-upstream-tracking/<release> beside it.
+_TRACKING_RELEASE = re.compile(rf"^{re.escape(TRACKING_BRANCH)}-[a-z][a-z0-9]{{2,}}$")
 
 # Characters and sequences git refuses in a ref name, plus whitespace.
 _BAD_REF = re.compile(r"\.\.|[\s~^:?*\[\\]|@\{|//|/\.|\.lock(/|$)|^/|/$|\.$")
@@ -101,10 +105,17 @@ def branch_for(package: str, release: str,
     return template.format(package=package, release=release)
 
 
+def template_for(release: str, template: str,
+                 per_release: Optional[Dict[str, str]] = None) -> str:
+    """The release's own template from settings.yaml, else the shared one."""
+    return (per_release or {}).get(release) or template
+
+
 def in_namespace(branch: str) -> bool:
     """Whether `branch` is a name this workflow may create."""
     return bool(branch) and (
         branch == TRACKING_BRANCH
+        or bool(_TRACKING_RELEASE.match(branch))
         or any(branch.startswith(ns) and len(branch) > len(ns)
                for ns in _NAMESPACES)
     )
@@ -126,8 +137,9 @@ def validate_branch(branch: str, base: str) -> None:
     if not in_namespace(branch):
         raise PublishError(
             ErrorCode.INVALID_REQUEST,
-            f"Branch {branch!r} is not {TRACKING_BRANCH} or under "
-            f"{BRANCH_PREFIX}; this workflow only creates branches there.",
+            f"Branch {branch!r} is not {TRACKING_BRANCH}, "
+            f"{TRACKING_BRANCH}-<release> or under {BRANCH_PREFIX}; this "
+            f"workflow only creates branches there.",
         )
     if branch == base:
         raise PublishError(
@@ -357,12 +369,14 @@ class UpstreamMdPublisher:
     def __init__(self, workspaces, github, author_name: str, author_email: str,
                  branch_template: str = BRANCH_TEMPLATE,
                  exclude: Optional[Dict[str, str]] = None,
-                 defer: Sequence[str] = ()) -> None:
+                 defer: Sequence[str] = (),
+                 release_templates: Optional[Dict[str, str]] = None) -> None:
         self.workspaces = workspaces
         self.github = github
         self.author_name = author_name
         self.author_email = author_email
         self.branch_template = branch_template
+        self.release_templates = dict(release_templates or {})
         self.exclude = dict(exclude or {})
         self.defer = list(defer)
 
@@ -412,7 +426,8 @@ class UpstreamMdPublisher:
         if prior is not None and prior.branch and (
                 prior.pushed or prior.pull_request is not None):
             return prior.branch
-        return branch_for(target.package, target.release, self.branch_template)
+        return branch_for(target.package, target.release, template_for(
+            target.release, self.branch_template, self.release_templates))
 
     def refuse_shared_branches(
             self, queue: Sequence[Tuple[PublishTarget, Optional[PublishResult]]],

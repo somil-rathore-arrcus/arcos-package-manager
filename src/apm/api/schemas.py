@@ -111,8 +111,9 @@ class UpstreamMdPrRequest(BaseModel):
     branch_name: Optional[str] = Field(
         None,
         description=(
-            "Must be debian-upstream-tracking, or under upstream-metadata/ or "
-            "debian-upstream-tracking/, and not the target branch."
+            "Must be debian-upstream-tracking, debian-upstream-tracking-<release>, "
+            "or under upstream-metadata/ or debian-upstream-tracking/, and not "
+            "the target branch."
         ),
     )
     draft: bool = False

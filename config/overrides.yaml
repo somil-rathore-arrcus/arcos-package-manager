@@ -97,6 +97,16 @@ packages:
     confidence: high
     reason: Debian ships this as source package 'ust'.
 
+  pyrad:
+    repository: https://github.com/pyradius/pyrad.git
+    ref: master
+    confidence: high
+    reason: >-
+      Debian's metadata names https://github.com/wichert/pyrad, which GitHub now
+      redirects to pyradius/pyrad: the same repository under its new owner
+      (checked 2026-11-10). Recorded so debian/upstream.md names the canonical
+      URL rather than relying on the redirect.
+
   python-netfilterqueue:
     repository: https://github.com/oremanj/python-netfilterqueue.git
     ref: master

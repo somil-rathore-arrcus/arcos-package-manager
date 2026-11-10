@@ -795,3 +795,15 @@ def test_the_verifier_requires_the_flag_on_a_branch_from_a_tag():
              "current_upstream_branch": "master", "upstream_tag": "",
              "flags": [{"code": BRANCH_FROM_TAG, "detail": "x"}]}
     assert BRANCH_FROM_TAG in VERIFY.plan_entry_problems(stray, plain)[0]
+
+
+@pytest.mark.parametrize("name,ok", [
+    ("debian-upstream-tracking", True),
+    ("debian-upstream-tracking-trixie", True),
+    ("upstream-metadata/bookworm/mstpd", True),
+    ("debian-upstream-tracking-x", False),
+    ("debian-upstream-tracking-trixie/x", False),
+    ("aminor-trixie", False),
+])
+def test_the_verifier_accepts_the_publishers_branch_names(name, ok):
+    assert VERIFY.metadata_branch(name) is ok

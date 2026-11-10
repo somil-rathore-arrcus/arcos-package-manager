@@ -148,12 +148,18 @@ class Container:
         )
         self.upstream_md = UpstreamMdService()
         publish = self.settings.upstream_md_publish
-        # One template for the plan and the push, checked before either runs.
+        # One template for the plan and the push, checked before either runs,
+        # and a release's own where settings.yaml gives one.
         branch_template = validate_template(
             publish["branch_template"] or BRANCH_TEMPLATE)
+        release_templates = {
+            release: validate_template(template) for release, template
+            in publish["release_branch_templates"].items()
+        }
         self.metadata_batch = MetadataBatchService(
             self.upstream_md, workspaces=self.workspaces,
             branch_template=branch_template,
+            release_templates=release_templates,
         )
         self.github = GitHubService(
             token=self.environment.github_token,
@@ -171,6 +177,7 @@ class Container:
             branch_template=branch_template,
             exclude=publish["exclude"],
             defer=publish["defer"],
+            release_templates=release_templates,
         )
 
     def debian_patches_for(self, resolution):

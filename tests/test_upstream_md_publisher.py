@@ -37,8 +37,8 @@ from apm.services.publish_ledger import PublishLedger
 from apm.services.upstream_md_publisher import (
     BRANCH_TEMPLATE, TRACKING_BRANCH, PublishError, PublishTarget,
     UpstreamMdPublisher, branch_for, commit_title, lint_content, load_targets,
-    names_proposal, sha256_text, target_from_resolution, validate_branch,
-    validate_template,
+    names_proposal, sha256_text, target_from_resolution, template_for,
+    validate_branch, validate_template,
 )
 from apm.services.upstream_md_service import MARKER, UpstreamMdService
 
@@ -1375,6 +1375,33 @@ def test_push_only_selection_keeps_what_it_can_do_nothing_more_for(tmp_path):
 
 # -- debian-upstream-tracking: one branch name for the whole repository --------
 
+def test_a_release_with_its_own_template_gets_its_own_branch(tmp_path):
+    """trixie's proposal goes beside bookworm's, never onto it."""
+    publisher = UpstreamMdPublisher(
+        FakeWorkspaces(tmp_path / "ws"), FakeGitHub(), author_name="a",
+        author_email="a@b", branch_template=TRACKING_BRANCH,
+        release_templates={"trixie": "debian-upstream-tracking-trixie"},
+    )
+    bookworm = _target(None)
+    trixie = _target(None, debian_release="trixie", arcos_branch="aminor-trixie")
+    assert publisher.branch_of(bookworm) == TRACKING_BRANCH
+    assert publisher.branch_of(trixie) == "debian-upstream-tracking-trixie"
+    assert template_for("trixie", TRACKING_BRANCH, {"trixie": "t"}) == "t"
+    assert template_for("bookworm", TRACKING_BRANCH, {"trixie": "t"}) == TRACKING_BRANCH
+    assert template_for("bookworm", TRACKING_BRANCH, None) == TRACKING_BRANCH
+
+
+def test_the_shipped_settings_name_one_branch_per_release():
+    from apm.config import load_settings
+    from apm.services.upstream_md_publisher import validate_template
+
+    publish = load_settings().upstream_md_publish
+    templates = publish["release_branch_templates"]
+    assert publish["branch_template"] == TRACKING_BRANCH
+    assert templates == {"trixie": "debian-upstream-tracking-trixie"}
+    for template in templates.values():
+        assert validate_template(template) == template
+
 def _tracking_publisher(tmp_path, github=None):
     return UpstreamMdPublisher(
         FakeWorkspaces(tmp_path / "ws-tracking"), github or FakeGitHub(),
@@ -1391,6 +1418,7 @@ def _target(remote, package="mstpd", **overrides):
 
 @pytest.mark.parametrize("name", [
     TRACKING_BRANCH, "debian-upstream-tracking/bookworm", BRANCH,
+    "debian-upstream-tracking-trixie",
 ])
 def test_both_conventions_name_branches_the_workflow_may_create(name):
     validate_branch(name, "aminor")
@@ -1398,6 +1426,9 @@ def test_both_conventions_name_branches_the_workflow_may_create(name):
 
 @pytest.mark.parametrize("name", [
     "debian-upstream-tracking-x", "debian-upstream-trackingx",
+    "debian-upstream-tracking-tx", "debian-upstream-tracking-Trixie",
+    "debian-upstream-tracking--trixie", "debian-upstream-tracking-trixie/x",
+    "debian-upstream-tracking-trixie-2", "debian-upstream-tracking-",
     "debian-upstream-tracking/", "debian-upstream-tracking/a..b",
     "x/debian-upstream-tracking", "upstream-metadata", "upstream-metadata/",
 ])

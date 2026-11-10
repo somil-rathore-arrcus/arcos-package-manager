@@ -585,7 +585,7 @@ export interface UpstreamMdPrRequest {
   package: string
   release: string
   arcos_branch?: string | null
-  /** Must be debian-upstream-tracking, or under upstream-metadata/ or debian-upstream-tracking/, and not the target branch. */
+  /** Must be debian-upstream-tracking, debian-upstream-tracking-<release>, or under upstream-metadata/ or debian-upstream-tracking/, and not the target branch. */
   branch_name?: string | null
   draft?: boolean
   /** Build and check the exact commit, then stop: nothing is pushed and no pull request is opened. */

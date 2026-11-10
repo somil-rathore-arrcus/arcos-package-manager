@@ -169,6 +169,14 @@ upstream_md_publish:
   # {package} name keeps that name. The publisher refuses anything outside
   # these two conventions, and any name equal to the target branch.
   branch_template: "debian-upstream-tracking"
+  # A release's own branch, where it needs one. A repository whose
+  # debian-upstream-tracking carries the bookworm (aminor) proposal takes the
+  # trixie (aminor-trixie) one here, side by side; git cannot hold
+  # debian-upstream-tracking/trixie beside debian-upstream-tracking. Decided
+  # 2026-11-10. A branch already pushed keeps its name (mstpd's trixie proposal
+  # is on debian-upstream-tracking).
+  release_branch_templates:
+    trixie: "debian-upstream-tracking-trixie"
   # Packages never proposed, with the reason recorded in the results ledger.
   exclude:
     ONL-standalone: >-
