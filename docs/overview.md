@@ -30,9 +30,9 @@ ARCoS package
  → missing / backported / unknown / critical analysis
  → debian/upstream.md                  (two fields, rendered from the verified mapping)
  → dry run                             (builds and checks the exact commit, pushes nothing)
- → create branch → push branch → create GitHub PR    (only with --apply and a confirmation;
-                                                      with --push-only, a person opens the PR from a link)
- → review → merge                      (people, on GitHub - never the tool)
+ → create branch → push branch         (only with --apply and a confirmation, on the one machine
+                                        with APM_ALLOW_PUSH; no second branch for the same file)
+ → open the PR → review → merge        (people, on GitHub, from the Compare Link - never the tool)
 ```
 
 | Stage | Dashboard | CLI (`docker compose exec app apm ...`) | Details |
@@ -43,7 +43,7 @@ ARCoS package
 | Critical commits | **Critical** filter, **Select critical** | `compare` | [criticality-and-security.md](criticality-and-security.md) |
 | Preview patches | **Preview N selected** | - | [patch-workflow.md](patch-workflow.md) |
 | `debian/upstream.md` | **Generate** | `generate-upstream-md` | [upstream-md.md](upstream-md.md) |
-| Pull requests | **Create pull request** | `publish-upstream-md` | [upstream-md-publishing.md](upstream-md-publishing.md) |
+| Push the branch; a person opens the PR | **Dry run**, **Push branch (no PR)** | `publish-upstream-md`, `upstream-md-report` | [upstream-md-publishing.md](upstream-md-publishing.md) |
 
 ## The vocabulary
 
@@ -92,7 +92,10 @@ They are never counted as missing.
 - call a commit critical because its subject sounds alarming
 - count ARCoS's own commits, or commits already backported, as missing
 - write to a target branch, force-push, merge, or resolve a conflict
-- push or open a pull request without an explicit, confirmed action
+- create, open, submit or merge a pull request - a person opens each one from
+  the pushed branch's Compare Link
+- push without an explicit, confirmed action, or from a machine without
+  `APM_ALLOW_PUSH`
 - write a branch, tag or repository into `debian/upstream.md` that the mapping
   did not verify (it writes `N/A` and the reason)
 - overwrite a `debian/upstream.md` it does not recognise as its own
@@ -101,7 +104,8 @@ They are never counted as missing.
 ## Two ways to use it
 
 - **Dashboard** at `http://<server-ip>:8080/` - pick a release, a package and
-  the ARCoS branch; resolve, compare, preview, generate.
+  the ARCoS branch; resolve, compare, preview, generate, and - where pushing
+  is allowed - push a reviewed branch.
 - **CLI** inside the container - `docker compose exec app apm <command>` - for
   whole-release runs and for publishing. See [cli.md](cli.md).
 

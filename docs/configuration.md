@@ -4,7 +4,7 @@
 
 | Source | Holds | Committed? | Read |
 |---|---|---|---|
-| `.env` (from `.env.example`) | Everything machine-specific: user ids, paths, the key's path, the token, timeouts | **No** - gitignored, never in the image | By Compose when the container is **created** |
+| `.env` (from `.env.example`) | Everything machine-specific: user ids, paths, the key's path, whether this machine pushes, the tokens, timeouts | **No** - gitignored, never in the image | By Compose when the container is **created** |
 | `docker-compose.yml` | Container paths, mounts, hardening; maps `.env` host paths to container paths | Yes | By Compose |
 | `config/settings.yaml` | Static behaviour: manifest, releases, archive, hosts, ancestry, publish rules | Yes | At process start |
 | `config/overrides.yaml` | Hand-verified upstream mappings. Always wins | Yes | At process start |
@@ -17,7 +17,7 @@ Precedence for package data: `overrides.yaml` > the generated catalogue >
 
 | You changed | Run |
 |---|---|
-| `.env` (any value, including the token) | `docker compose up -d --force-recreate` |
+| `.env` (any value, including the tokens and `APM_ALLOW_PUSH`) | `docker compose up -d --force-recreate` |
 | `APM_UID` / `APM_GID` | `docker compose up -d --build` |
 | `config/settings.yaml` or `config/overrides.yaml` | `docker compose restart`, then re-resolve the affected packages |
 | Code (`git pull`) | `docker compose up -d --build` |
@@ -51,12 +51,13 @@ values, shown in the last column.
 | `APM_SSH_STRICT_HOST_KEY_CHECKING` | `accept-new` | `yes` | ssh `StrictHostKeyChecking` for git and the bridge |
 | `APM_PRIVATE_REPOSITORY_PATTERNS` | from `settings.yaml` | commented | Comma-separated regular expressions on the URL; which repositories `auto` sends over the bridge |
 
-### GitHub API (pull requests only)
+### Pushing and the GitHub API
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `APM_API_TOKEN` | empty | This deployment's own token. When set, a push, a pull request, a cherry-pick that pushes, a content-base approval and `write_local` need `Authorization: Bearer <token>`; the dashboard asks for it once per tab. Empty = anyone who can reach the port can push. **Secret.** |
-| `APM_GITHUB_TOKEN` | empty | Token for the GitHub REST API. Empty = read-only: the tool opens no pull request (`publish-upstream-md --push-only` still pushes branches with the SSH key). **Secret.** See [authentication.md](authentication.md) |
+| `APM_ALLOW_PUSH` | off | Whether **this machine** may push. `1`, `true`, `yes` or `on` turns it on; anything else, including unset, is off. Off, every push - `debian/upstream.md` branch or patch branch, CLI, dashboard or API - is refused with `PUSH_DISABLED` (HTTP 403); reads, comparisons, previews and dry runs still work, and `/api/health` reports `push_enabled: false`, `read_only: true`. Set only in the `.env` of the Docker Compose deployment on Lakshya's machine. See [authentication.md](authentication.md#apm_allow_push-the-one-machine-that-pushes) |
+| `APM_API_TOKEN` | empty | This deployment's own token. When set, a push, a cherry-pick that pushes, a content-base approval and `write_local` need `Authorization: Bearer <token>`; the dashboard asks for it once per tab. Empty = anyone who can reach the port can push (where `APM_ALLOW_PUSH` is set). **Secret.** |
+| `APM_GITHUB_TOKEN` | empty | Token for the GitHub REST API, used only to **read**: finding a pull request a person opened, and its CI checks. It never enables opening a pull request - the tool opens none. Empty = everything still works; pull requests are found from git refs, but not their state or CI. **Secret.** See [authentication.md](authentication.md) |
 | `APM_GITHUB_API_URL` | `https://api.github.com` | API base URL |
 
 ### Commits the tool creates
@@ -139,7 +140,7 @@ Only for a deployment whose own key cannot reach the repositories.
 | `security.osv` | OSV.dev lookups: on/off, URL, timeout, cache TTL |
 | `private_repository_patterns` | Default private patterns for the `auto` backend |
 | `patches` | `validation_commands` run in the patched tree before a patch branch may be pushed (empty: nothing is built or tested, and the tool says so), `validation_timeout_seconds` (900) - see [patch-workflow.md](patch-workflow.md#validation-build-or-test-the-patched-tree) |
-| `upstream_md_publish` | Branch template `debian-upstream-tracking` ([upstream-md-publishing.md](upstream-md-publishing.md#branch-name)), `exclude` (packages never proposed, with the reason - [below](#upstream_md_publishexclude)), `defer` (processed last: `openssl`, `linux`) |
+| `upstream_md_publish` | Branch template `debian-upstream-tracking` and `release_branch_templates` (trixie: `debian-upstream-tracking-trixie`) - the only source of branch names; neither the CLI nor the API can choose one ([upstream-md-publishing.md](upstream-md-publishing.md#branch-name)), `exclude` (packages never proposed, with the reason - [below](#upstream_md_publishexclude)), `defer` (processed last: `openssl`, `linux`) |
 
 ### `upstream_md_publish.exclude`
 

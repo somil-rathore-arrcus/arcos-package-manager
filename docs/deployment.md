@@ -18,9 +18,9 @@ Browser ── http://<server-ip>:8080 ──▶ app container (unprivileged, re
 
 - Docker Engine with the Compose plugin: `docker compose version`.
 - Git, to clone this repository.
-- An SSH key on the server that can read (and, for publishing, push to) the
-  Arrcus GitHub repositories, without a passphrase. Check it on the host:
-  `ssh -T git@github.com` answers `Hi <account>!`.
+- An SSH key on the server that can read (and, on the machine that publishes,
+  push to) the Arrcus GitHub repositories, without a passphrase. Check it on
+  the host: `ssh -T git@github.com` answers `Hi <account>!`.
 - Network access from the server to github.com (SSH and HTTPS),
   deb.debian.org, security.debian.org, api.osv.dev, and - for building -
   Docker Hub, PyPI and the npm registry.
@@ -42,7 +42,8 @@ Edit `.env` with an editor. For a first start, set:
 | `APM_GIT_SSH_KEY_FILE` | the **host path** of the private key, e.g. `/home/<user>/.ssh/id_ed25519` |
 | `APM_WORKSPACE_HOST_DIR` | a host directory with several GB free for git clones (default `./workspace`) |
 | `APM_COMMITTER_NAME`, `APM_COMMITTER_EMAIL` | the person accountable for the commits the tool creates |
-| `APM_GITHUB_TOKEN` | leave **empty** for now - the application then runs read-only (`publish-upstream-md --push-only` can still push branches with the SSH key) |
+| `APM_ALLOW_PUSH` | `1` **only** on the machine that pushes - the deployment on Lakshya's machine. Leave it empty everywhere else: the application then runs read-only - it compares, previews and dry-runs, and refuses every push with `PUSH_DISABLED` |
+| `APM_GITHUB_TOKEN` | leave **empty** - it is optional and only read with (a pull request a person opened, its CI checks). No setting makes the tool open a pull request |
 
 `APM_GIT_BACKEND=local` (already in `.env.example`) makes git run inside the
 container with that key. Every variable is described in
@@ -71,12 +72,15 @@ docker compose logs app            # the startup lines below
 
 ```
 apm: ARCoS Package Manager starting as uid 1000 on 0.0.0.0:8080
-apm: git backend=local, git ssh key=mounted read-only, github token=not set (read-only)
+apm: git backend=local, git ssh key=mounted read-only, github token=not set
+apm: pushing disabled (APM_ALLOW_PUSH unset); pull requests are never opened by this application
 apm: workspace=/var/tmp/arcos-package-manager, output=/app/out, packages file=/app/out/packages.yaml
 apm: mapping=/app/out/upstream-resolutions.json
 ```
 
-The log says whether a key and a token are configured - never their values.
+The log says whether a key and a token are configured - never their values -
+and whether this machine pushes (`pushing enabled on this machine` where
+`APM_ALLOW_PUSH` is set).
 
 ## 4. Check it
 
@@ -84,14 +88,16 @@ The log says whether a key and a token are configured - never their values.
 docker compose exec app apm doctor --repo Arrcus/mstpd
 ```
 
-Every line should be `PASS`, except `WARN APM_GITHUB_TOKEN is not set` while
-the token is empty. The last line reads `FAILURES: none`.
+Every line should be `PASS`, except `WARN APM_ALLOW_PUSH is not set` on any
+machine but the one that pushes, and `WARN APM_API_TOKEN is not set` while that
+is empty. A missing `APM_GITHUB_TOKEN` is a `PASS`: it is not needed. The last
+line reads `FAILURES: none`.
 
 From any machine (or a browser):
 
 ```bash
 curl -s http://<server-ip>:8080/health        # {"status":"ok","version":"..."}
-curl -s http://<server-ip>:8080/api/health    # capabilities: private access, PRs, storage, mapping
+curl -s http://<server-ip>:8080/api/health    # capabilities: private access, push_enabled, storage, mapping
 ```
 
 Open `http://<server-ip>:8080/`.
@@ -154,7 +160,7 @@ therefore needs to reach api.github.com.
 
 | What | Host | Container |
 |---|---|---|
-| Mapping, reports, `upstream.md` files, PR plan and ledgers, comparison snapshots, approvals, runtime `packages.yaml` | `./out` or `APM_OUT_HOST_DIR` | `/app/out` |
+| Mapping, reports, `upstream.md` files (`out/upstream-md-<release>/`), PR plan, ledgers, links files and the publishing report, comparison snapshots, approvals, runtime `packages.yaml` | `./out` or `APM_OUT_HOST_DIR` | `/app/out` |
 | Git clones, ancestry probe workdirs, scratch workspaces | `./workspace` or `APM_WORKSPACE_HOST_DIR` | `/var/tmp/arcos-package-manager` |
 | Debian indices and tarballs, OSV answers, ancestry cache | volume `apm-cache` or `APM_CACHE_HOST_DIR` | `/var/cache/arcos-package-manager` |
 | Shipped configuration | `./config`, read-only | `/app/config` |
@@ -167,9 +173,10 @@ is never written: `discover` writes the package catalogue to
 ## Access control
 
 The dashboard and the API have **no login**. Anyone who can reach port 8080
-can use them - including the endpoints that push branches with the server's
-SSH key (no token needed, e.g. `POST /api/upstream-md/pr` with
-`push_only: true`) and, once a token is configured, open pull requests. Keep the port reachable only from the
+can use them - including, on the machine where `APM_ALLOW_PUSH` is set, the
+endpoints that push branches with the server's SSH key (e.g.
+`POST /api/upstream-md/pr` with `confirm: true`), unless `APM_API_TOKEN` is
+set. No endpoint opens a pull request. Keep the port reachable only from the
 network that should use it:
 
 - `APM_BIND_ADDRESS=127.0.0.1` in `.env` publishes the port on the host's

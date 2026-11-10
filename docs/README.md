@@ -11,13 +11,13 @@ Docker deployment and are run from the checkout directory on the server.
 | 2 | [architecture.md](architecture.md) | How it is built; what runs where (container, host, browser, credentials, data) |
 | 3 | [deployment.md](deployment.md) | Installing it with Docker Compose |
 | 4 | [configuration.md](configuration.md) | Every environment variable and configuration file |
-| 5 | [authentication.md](authentication.md) | The SSH key (git) and the GitHub token (pull requests) |
+| 5 | [authentication.md](authentication.md) | The SSH key (git), `APM_ALLOW_PUSH` (the one machine that pushes) and the read-only GitHub token |
 | 6 | [upstream-resolution.md](upstream-resolution.md) | How the upstream repository and ref are chosen and proven |
 | 7 | [git-comparison.md](git-comparison.md) | Missing, present, backported, unknown and ARCoS-specific commits |
 | 8 | [criticality-and-security.md](criticality-and-security.md) | When a commit is called critical, and the evidence sources |
 | 9 | [patch-workflow.md](patch-workflow.md) | Previewing and applying upstream patches safely |
 | 10 | [upstream-md.md](upstream-md.md) | Generating `debian/upstream.md` and the PR plan |
-| 11 | [upstream-md-publishing.md](upstream-md-publishing.md) | Proposing `debian/upstream.md` as pull requests |
+| 11 | [upstream-md-publishing.md](upstream-md-publishing.md) | Pushing `debian/upstream.md` branches, the links a person opens each PR from, and the Bookworm/Trixie publishing report |
 | 12 | [cli.md](cli.md) | Every `apm` command and option |
 | 13 | [api.md](api.md) | Every HTTP endpoint |
 | 14 | [testing.md](testing.md) | Running the tests and the output checks |
@@ -33,7 +33,8 @@ the way it is; for how to run it, use the pages above.
 
 - **Operating the server:** deployment → operations → authentication →
   troubleshooting.
-- **Creating the PRs:** production-handoff (it links to everything it needs).
+- **Publishing (the tool pushes branches; a person opens each PR):**
+  production-handoff (it links to everything it needs).
 - **Reviewing a result:** overview → upstream-resolution → git-comparison →
   criticality-and-security.
 - **Changing the code:** architecture → api → testing.

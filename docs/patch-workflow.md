@@ -5,12 +5,13 @@ an explicit act. Nothing advances on its own.
 
 ```
 select → preview (+ validation) → cherry-pick to a new branch (+ validation, push)
-       → pull request → CI status
+       → pull request, opened by a person from the link → CI status
 ```
 
-This is separate from the `debian/upstream.md` pull requests
-([upstream-md-publishing.md](upstream-md-publishing.md)): those add one
-metadata file; these carry source changes.
+The tool never opens the pull request: it pushes the branch and hands back the
+link a person opens it from. This is separate from the `debian/upstream.md`
+branches ([upstream-md-publishing.md](upstream-md-publishing.md)): those add
+one metadata file; these carry source changes.
 
 ## In the dashboard
 
@@ -23,12 +24,13 @@ metadata file; these carry source changes.
    validation result), **Conflict** (the commit that failed and its
    conflicting paths), **Validation failed** (the command, its exit status and
    output), or **Preview failed**.
-4. After a clean preview only:
-   - with a token, **Create patch branch and push**, then **Create pull
-     request** - a separate click;
-   - without a token, **Push patch branch (no PR)**: the branch is pushed with
-     the SSH key and **Open the pull request on GitHub** links the pre-filled
-     form (title and the description below) for a person with access.
+4. After a clean preview only, and where the deployment allows pushing
+   (`APM_ALLOW_PUSH`): **Push patch branch (no PR)**. The branch is pushed with
+   the SSH key and **Open the pull request on GitHub** links the pre-filled
+   form (title and the description below) for a person with access. There is
+   no button that creates the pull request. Where pushing is disabled, the card
+   says **Pushing is disabled** and offers no push; the preview stays
+   complete.
 5. **Pull request and CI** then shows the branch's commit on the fork, any
    pull request opened from it (found from the fork's `refs/pull/<n>/head`
    over SSH, so it works without a token), and its checks. **Refresh status**
@@ -101,25 +103,29 @@ upstream/<package>/<YYYYMMDD-HHMMSS>
 The target branch is never written to; a branch name equal to the target is
 refused. Commits are applied with `git cherry-pick -x`, so each records the
 upstream SHA it came from. A commit that turns out to be empty is skipped
-rather than failing the series. Pushing happens only with `push: true`; a
+rather than failing the series. Pushing happens only with `push: true`, and
+only on a machine where `APM_ALLOW_PUSH` is set - elsewhere `push: true` is
+refused with `PUSH_DISABLED` (HTTP 403) before anything is applied. A
 conflicting series pushes nothing.
 
 ## Pull request
 
-A separate call. The description starts with the three sections ARCoS CI
-requires - `Problem Description :`, `Root Cause :` and `Fix Details :` - then
-the package, release, target branch, upstream repository and ref, the
-resolution, the merge base, every applied commit (linked to upstream, with its
-criticality and evidence where the comparison assessed it) and the validation
-result as it happened. The cherry-pick returns this title and description
-(`pr_title`, `pr_body`) and, once pushed, the pre-filled link
-(`pr_create_url`); the dashboard sends the same text when it opens the PR. If
-a PR is already open for the branch it is returned instead of a duplicate.
+Opened by a person, never by the tool. The description starts with the three
+sections ARCoS CI requires - `Problem Description :`, `Root Cause :` and
+`Fix Details :` - then the package, release, target branch, upstream
+repository and ref, the resolution, the merge base, every applied commit
+(linked to upstream, with its criticality and evidence where the comparison
+assessed it) and the validation result as it happened. The cherry-pick returns
+this title and description (`pr_title`, `pr_body`) and, once pushed, the
+pre-filled link (`pr_create_url`) that puts them on GitHub's form; whoever
+opens the link creates the pull request. `POST /api/pull-requests` is always
+refused with 403 `PULL_REQUESTS_DISABLED`.
 
 ## CI status
 
 `GET /api/publish-status?package=&branch=&base=` reports, for a branch this
-tool created (`upstream/...` or `upstream-metadata/...` only):
+tool created (`upstream/...`, `upstream-metadata/...`,
+`debian-upstream-tracking` or `debian-upstream-tracking-<release>` only):
 
 - whether the branch is on the fork, and its commit;
 - pull requests whose head is that commit, from git refs - number and link,
@@ -147,19 +153,16 @@ curl -s -X POST $API/patches/preview -H 'Content-Type: application/json' -d '{
 # → outcome CLEAN | CONFLICT | VALIDATION_FAILED | EMPTY | FAILED, base_sha,
 #   order, files_changed, validation
 
-# 2. cherry-pick onto a new branch; push only when asked
+# 2. cherry-pick onto a new branch; push only when asked (and only where
+#    APM_ALLOW_PUSH is set: 403 PUSH_DISABLED otherwise)
 curl -s -X POST $API/patches/cherry-pick -H 'Content-Type: application/json' -d '{
   ...same fields..., "expected_base_sha": "<base_sha from the preview>", "push": true
 }'
 # → new_branch, applied, head_sha, pushed, commits, validation, pr_title,
 #   pr_body, pr_create_url (once pushed)
 
-# 3. pull request (needs the token) - or open pr_create_url in a browser
-curl -s -X POST $API/pull-requests -H 'Content-Type: application/json' -d '{
-  "package": "mstpd", "release": "bookworm", "arcos_branch": "aminor",
-  "head_branch": "<new_branch>", "applied": ["<sha1>", "<sha2>"],
-  "title": "<pr_title>", "body": "<pr_body>"
-}'
+# 3. pull request: a person opens pr_create_url in a browser. The tool never
+#    opens one - POST /api/pull-requests answers 403 PULL_REQUESTS_DISABLED.
 
 # 4. where it stands: PR (from refs) and CI (token only)
 curl -s "$API/publish-status?package=mstpd&branch=<new_branch>&base=aminor"
@@ -168,8 +171,8 @@ curl -s "$API/publish-status?package=mstpd&branch=<new_branch>&base=aminor"
 ## What never happens automatically
 
 - cherry-picking into the target branch
-- pushing
-- opening a pull request
+- pushing - and never at all on a machine without `APM_ALLOW_PUSH`
+- opening a pull request - the tool never does, even when asked
 - resolving a conflict
 - selecting patches beyond an explicit click (or **Select critical**)
 - merging

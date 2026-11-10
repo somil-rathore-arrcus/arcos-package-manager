@@ -31,7 +31,8 @@ scripts/test.sh
 ```
 
 `scripts/test.sh` runs the backend tests, the frontend typecheck and tests,
-and - when the files exist - the three output checks below.
+and - when the files exist - the three output scripts below (not the
+report's `--verify`, which reads GitHub).
 
 ## What the tests cover
 
@@ -47,7 +48,11 @@ and - when the files exist - the three output checks below.
   dependencies, the healthcheck, read-only mounts, the entrypoint never
   printing a secret.
 - **GitHub is always mocked.** No test pushes to a real repository or opens a
-  real pull request.
+  real pull request. The application opens none either: a test reads
+  `github_service.py` to keep its client `GET`-only, and others check that
+  `POST /api/pull-requests` and `"push_only": false` are refused, that every
+  push is refused without `APM_ALLOW_PUSH`, and that the dashboard publishes
+  only from the reviewed plan.
 
 Frontend tests mock `fetch` rather than the API client, so URL construction,
 query strings and error decoding are exercised too.
@@ -62,10 +67,13 @@ Run inside the container against the data in `out/`:
 ```bash
 docker compose exec app python scripts/verify_output.py              # mapping invariants
 docker compose exec app python scripts/verify_upstream_md.py bookworm # two fields, match mapping and plan
-docker compose exec app python scripts/verify_pr_ledger.py bookworm   # ledger invariants (after --apply, also --push-only)
+docker compose exec app python scripts/verify_pr_ledger.py bookworm   # ledger invariants (after --apply): BRANCH_PUSHED, COVERED, no PR_OPENED
+docker compose exec app apm upstream-md-report --verify               # every pushed branch read back from GitHub; exit 1 if one is not as recorded
 ```
 
-Each ends with `FAILURES: none` when all checks pass.
+Each script ends with `FAILURES: none` when all checks pass; the report
+command prints how many branches were checked and which, if any, were not as
+recorded.
 
 ## Smoke test of a deployment
 
@@ -78,7 +86,10 @@ docker compose exec app apm publish-upstream-md --release bookworm --package mst
 ```
 
 The last command is a dry run: it reads, builds and checks the commit, and
-pushes nothing.
+pushes nothing - on any machine, with or without `APM_ALLOW_PUSH`. Once
+`mstpd`'s branch is pushed, the dry run keeps it instead
+(`pushed, waiting for a PR 1`); with `--recheck` it checks the pushed branch
+and reports `DRY_RUN_OK` (`branch already pushed; ...`).
 
 ## After changing a domain model
 

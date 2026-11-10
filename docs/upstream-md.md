@@ -10,13 +10,14 @@ The evidence behind the two values - verification level, ref selection,
 merge base, counts, backlog - goes into the pull request body. A reviewer reads
 it once; the package does not carry it forever. The plan carries less: each
 package's status, reason and [review flags](#review-flags) beside the two
-values. To read the full body before anything is pushed, run a `--push-only`
-dry run: its links file has each package's description
+values. To read the full body before anything is pushed, run a
+`publish-upstream-md` dry run: its links file has each package's description
 ([upstream-md-publishing.md](upstream-md-publishing.md#the-links-file)).
 
 Generating writes files **locally** under `out/`. It pushes nothing, creates no
-branch, opens no pull request and needs no GitHub token. Proposing the files is
-a separate step: [upstream-md-publishing.md](upstream-md-publishing.md).
+branch, opens no pull request and needs no GitHub token. Pushing the files is
+a separate step, and opening the pull requests is a person's:
+[upstream-md-publishing.md](upstream-md-publishing.md).
 
 ## What the file contains
 
@@ -110,8 +111,8 @@ Flags appear in:
   one line of codes per package;
 - the plan: `flags` in the JSON, the **Flags** column and the
   **Flagged for review** section (each code with its detail) in the Markdown;
-- the output of a `publish-upstream-md` dry run (and of a push-only apply),
-  as `review: <CODE> - <detail>` under each package;
+- the output of a `publish-upstream-md` dry run (and of an apply), as
+  `review: <CODE> - <detail>` under each package;
 - the pull request body, under `Review notes :`.
 
 Always in this order:
@@ -152,7 +153,7 @@ pull request body, which is built when publishing.
 
 | File | Contents |
 |---|---|
-| `out/upstream-md/<package>/debian/upstream.md` | The file, exactly as it would be committed |
+| `out/upstream-md-<release>/<package>/debian/upstream.md` | The file, exactly as it would be committed. One folder per release, so regenerating one release never replaces the files another release's plan was reviewed on |
 | `out/upstream-md-plan-<release>.json` | The plan: one entry per package (keys below), plus the skipped packages and why. `"pushed": false`, `"pull_requests_created": false` |
 | `out/upstream-md-plan-<release>.md` | The same plan as a table - Package, ARCoS repository, Base branch, Branch, Outcome, Upstream Source, Current Upstream Branch, Flags (codes) - then **Flagged for review** (each flagged package with each code and detail, or `No package is flagged.`), then the packages not generated |
 
@@ -161,7 +162,7 @@ Each plan entry:
 | Key | Holds |
 |---|---|
 | `package`, `release`, `status` | The package and its resolution status |
-| `arcos_repository`, `base_branch`, `branch` | Where the change goes: `Arrcus/mstpd`, `aminor`, `upstream-metadata/bookworm/mstpd` |
+| `arcos_repository`, `base_branch`, `branch` | Where the change goes: `Arrcus/mstpd`, `aminor`, and the branch `settings.yaml` names (`debian-upstream-tracking`; trixie `debian-upstream-tracking-trixie`). A package that already has a pushed branch keeps that one when published ([branch name](upstream-md-publishing.md#branch-name)) |
 | `commit_message`, `outcome`, `diff` | The commit title, `CREATED` / `UPDATED` / `NO_CHANGE` / `CONFLICT`, and the diff against the fork |
 | `upstream_source`, `current_upstream_branch` | The two values exactly as the file writes them |
 | `upstream_branch` | The verified branch, or `""` |
@@ -232,10 +233,13 @@ it is a person's decision.
 ## Review checklist
 
 Open `out/upstream-md-plan-<release>.md` and, per package,
-`out/upstream-md/<package>/debian/upstream.md`:
+`out/upstream-md-<release>/<package>/debian/upstream.md`:
 
 - ARCoS repository and base branch are the package's fork and release branch
-  (`Arrcus/mstpd`, `aminor`); the branch is `upstream-metadata/<release>/<package>`.
+  (`Arrcus/mstpd`, `aminor`); the branch is `debian-upstream-tracking`
+  (trixie: `debian-upstream-tracking-trixie`). What is pushed - repository,
+  target and bytes - is exactly what this plan says, from the CLI and the
+  dashboard alike.
 - The file is the two lines and nothing else.
 - `Upstream Source` is the project you expect.
 - `Current Upstream Branch` is the branch you expect the fork to follow
@@ -271,7 +275,8 @@ docker compose exec app python scripts/verify_upstream_md.py bookworm
 
 `scripts/verify_upstream_md.py` is standalone - it does not import the tool, so
 a bug in the renderer cannot also be a bug in the check. It reads
-`out/upstream-mapping-<release>.csv`, the files and the plan:
+`out/upstream-mapping-<release>.csv`, the files in `out/upstream-md-<release>/`
+and the plan:
 
 | Check | Passes when |
 |---|---|
@@ -282,7 +287,7 @@ a bug in the renderer cannot also be a bug in the check. It reads
 | the plan pushed nothing / the plan created no pull request | `"pushed": false`, `"pull_requests_created": false` |
 | the plan covers exactly the generated files | |
 | no planned branch is the branch it targets | |
-| every planned branch is under upstream-metadata/ | |
+| every planned branch is one this workflow creates | `debian-upstream-tracking`, `debian-upstream-tracking-<release>`, or under `debian-upstream-tracking/` or `upstream-metadata/` |
 | the plan records each file's values and flags every unverified branch | `upstream_source` and `current_upstream_branch` equal the file's values, and `BRANCH_NOT_VERIFIED` is in `flags` exactly when the branch field starts with `N/A` |
 | every generated file still matches the plan's hash | |
 
@@ -302,6 +307,7 @@ curl -s -X POST http://<server-ip>:8080/api/upstream-md/generate \
 ```
 
 Returns the content (the two-field file), the outcome and the diff.
-`"write_local": true` also saves it as
-`out/upstream-md/<package>__<release>.md`. A `NO_UPSTREAM` package is refused
-(HTTP 400).
+`"write_local": true` also saves it as a draft,
+`out/upstream-md-drafts/<package>__<release>.md` - never a reviewed file:
+publishing reads only what `generate-upstream-md` wrote to
+`out/upstream-md-<release>/`. A `NO_UPSTREAM` package is refused (HTTP 400).

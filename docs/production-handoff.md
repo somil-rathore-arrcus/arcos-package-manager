@@ -9,7 +9,7 @@
 | Runtime | Docker Compose, service `app`, container `arcos-package-manager-app-1`, healthy |
 | Dashboard | `http://<server-ip>:8080/` |
 | Git access | `APM_GIT_BACKEND=local` with the host's own SSH key, mounted read-only; authenticates to GitHub as `lakshya-arrcus`; read and push (dry-run) verified on all 52 Arrcus repositories in use |
-| GitHub token | **Not set** - the tool cannot open a pull request itself |
+| GitHub token | **Not set** - not needed: the tool never opens a pull request itself, with or without one |
 | Commit author | `APM_COMMITTER_NAME` / `APM_COMMITTER_EMAIL` in `.env` (Somil Rathore) |
 | Data | `out/` in the checkout; clones in `/var/tmp/arcos-package-manager`; cache in volume `apm-cache` |
 | Tests | backend 438 passed, frontend 34 passed (in Docker) |
@@ -21,9 +21,24 @@
   the files in the host's `out/` are in the old format: until they are
   regenerated, `verify_upstream_md.py` fails and the publisher reports
   `DRIFT`.
-- `publish-upstream-md --push-only` pushes the branches with the SSH key and
+- `publish-upstream-md --apply` pushes the branches with the SSH key and
   prints a link per package for a person to open the pull request. No token is
-  needed ([upstream-md-publishing.md](upstream-md-publishing.md#push-only-mode-no-token)).
+  needed ([upstream-md-publishing.md](upstream-md-publishing.md#the-links-a-person-opens-the-pull-request)).
+- The application never creates, opens, submits or merges a pull request,
+  anywhere: `--push-only` is still accepted but changes nothing, `--draft` is
+  gone, the dashboard has no **Create pull request** button, and
+  `POST /api/pull-requests` answers 403 `PULL_REQUESTS_DISABLED`.
+- Pushing needs `APM_ALLOW_PUSH=1` in this host's `.env`: it is the only
+  machine that pushes. Without it every push is refused with `PUSH_DISABLED`;
+  comparisons and dry runs still work.
+- The dashboard pushes from the reviewed plan, exactly as the CLI; a request
+  can no longer name the branch or the target.
+- Reviewed files live in `out/upstream-md-<release>/` (one folder per
+  release). A package whose identical file another release's branch already
+  proposes to the same target ends `COVERED`, with no branch of its own.
+- `out/upstream-md-publishing-report.md` lists Bookworm and Trixie - pushed,
+  covered, not pushed - and is rebuilt after every push;
+  `apm upstream-md-report --verify` checks every pushed branch on GitHub.
 - The five `CURATED_CONFLICT` packages are in `upstream_md_publish.exclude`,
   so they stay out even if a later resolution marks them `VERIFIED`.
 
@@ -84,8 +99,8 @@ careful review of their PRs.
 
 | Role | Does |
 |---|---|
-| Lakshya | Opens each pull request from its link (push-only); his account can see the package repositories. Or creates the GitHub token, enters it in `.env` on the server and recreates the container - the token never leaves the server |
-| Operator | Runs the dry runs and the `--apply` commands, watches the ledger and the links file |
+| Lakshya | Opens each pull request from its link; his account can see the package repositories. His machine is the only one with `APM_ALLOW_PUSH` set. Optionally creates a read-only GitHub token, enters it in `.env` on the server and recreates the container - the token never leaves the server |
+| Operator | Runs the dry runs and the `--apply` commands on Lakshya's machine, watches the ledger, the links file and the publishing report |
 | Package reviewers | Review and merge each PR on GitHub |
 | Maintainer of this tool | Changes code and configuration through PRs to `arcos-package-manager` |
 
@@ -95,7 +110,7 @@ careful review of their PRs.
 cd /home/lakshya/somil/arcos-package-manager
 git status                     # clean, on main
 docker compose ps              # (healthy)
-docker compose exec app apm doctor --repo Arrcus/mstpd   # FAILURES: none (token: WARN until set)
+docker compose exec app apm doctor --repo Arrcus/mstpd   # FAILURES: none; PASS APM_ALLOW_PUSH is set (token: not needed)
 docker compose exec app python scripts/verify_output.py
 docker compose exec app python scripts/verify_upstream_md.py bookworm   # fails until regenerated
 ```
@@ -143,10 +158,11 @@ cause is understood.
 - Dry-run the whole set first; every eligible package must say `DRY_RUN_OK`.
 - Publish in small batches, and check each batch's PRs and CI before the next.
 - `--confirm` / `--confirm-count` must equal what the dry run says it will
-  push - a mismatch pushes nothing. This holds for `--push-only` too.
-- With `--push-only`, `--all --limit N` moves on batch by batch: a push-only
-  run leaves `BRANCH_PUSHED` packages alone and does not count them. A run
-  with a token does count them - it opens their pull requests.
+  push - a mismatch pushes nothing.
+- `--all --limit N` moves on batch by batch: a run leaves `BRANCH_PUSHED` and
+  `COVERED` packages alone and does not count them.
+- Push only from Lakshya's machine (`APM_ALLOW_PUSH`); anywhere else the push
+  is refused.
 - `openssl` and `linux` are processed last by design.
 - Three consecutive failures stop the run; fix the cause before re-running.
 - Never delete `out/upstream-md-pr-results-bookworm.json` - it is the record
@@ -158,10 +174,10 @@ cause is understood.
 ## What happens next
 
 Everything up to here is done: the deployment runs and the mapping is
-verified. The steps below are what remains, on the push-only route: the host
-pushes each branch with its SSH key, and Lakshya opens each pull request from
-its link. No token is needed. (With a token, see
-[the token route](#alternative-the-token-route) at the end.)
+verified. The steps below are what remains: the host pushes each branch with
+its SSH key, and Lakshya opens each pull request from its link. The tool never
+opens a pull request, and no token is needed. (A read-only token is
+[optional](#optional-a-read-only-token).)
 
 Run them on the server, in the checkout directory:
 
@@ -171,18 +187,22 @@ cd /home/lakshya/somil/arcos-package-manager
 
 ### 1. Deploy the new version
 
-After the change is merged to `main`:
+After the change is merged to `main`. This host is the one machine that
+pushes: if `.env` has no `APM_ALLOW_PUSH=1` yet, add it with an editor first
+(`nano .env`), so the rebuilt container is created with it.
 
 ```bash
 git pull --ff-only
 docker compose up -d --build
 docker compose ps                    # (healthy)
+docker compose logs app | grep pushing   # apm: pushing enabled on this machine; ...
 ```
 
 ### 2. Regenerate the files and the plan
 
-The files in `out/` are in the old format; generate them again (the full
-plan, not `--package`):
+The files in `out/` are in the old format, and the new version reads them
+from `out/upstream-md-<release>/`; generate them again (the full plan, not
+`--package`):
 
 ```bash
 docker compose exec app apm generate-upstream-md --release bookworm --branch aminor
@@ -199,7 +219,7 @@ If the mapping is old, refresh it first
 
 ```bash
 cat out/upstream-md-plan-bookworm.md
-cat out/upstream-md/mstpd/debian/upstream.md
+cat out/upstream-md-bookworm/mstpd/debian/upstream.md
 ```
 
 Check the table (Upstream Source, Current Upstream Branch, Flags) and the
@@ -209,13 +229,13 @@ Check the table (Upstream Source, Current Upstream Branch, Flags) and the
 `Arrcus/mstpd`, `aminor`, `upstream-metadata/bookworm/mstpd`, `CREATED`,
 `https://github.com/mstpd/mstpd.git`, `master`, no flags.
 
-### 4. Dry-run `mstpd` in push-only mode
+### 4. Dry-run `mstpd`
 
 ```bash
-docker compose exec app apm publish-upstream-md --release bookworm --package mstpd --push-only --show-diff
+docker compose exec app apm publish-upstream-md --release bookworm --package mstpd --show-diff
 ```
 
-Expect `DRY RUN (push only) - nothing will be pushed; showing the links an apply would give`,
+Expect `DRY RUN - nothing will be pushed; showing the links an apply would give`,
 a row
 `| mstpd | DRY_RUN_OK | upstream-metadata/bookworm/mstpd | <commit> | https://github.com/Arrcus/mstpd/compare/aminor...upstream-metadata/bookworm/mstpd?quick_pull=1 | |`,
 the line `Arrcus/mstpd aminor @ <sha> -> upstream-metadata/bookworm/mstpd @ <commit>`,
@@ -246,10 +266,10 @@ fill in: the three CI sections, the file in a fenced block, then the table -
 ### 6. Push the `mstpd` branch
 
 ```bash
-docker compose exec app apm publish-upstream-md --release bookworm --package mstpd --apply --push-only --confirm mstpd
+docker compose exec app apm publish-upstream-md --release bookworm --package mstpd --apply --confirm mstpd
 ```
 
-Expect `APPLY (push only) - branches will be pushed; no pull request will be opened`,
+Expect `APPLY - branches will be pushed; no pull request will be opened (this tool never opens one)`,
 a row `| mstpd | BRANCH_PUSHED | upstream-metadata/bookworm/mstpd | <commit> | https://github.com/Arrcus/mstpd/compare/aminor...upstream-metadata/bookworm/mstpd?quick_pull=1 | |`,
 and `Branches were pushed. No pull request was created. Open each one with its link in .../upstream-md-pr-links-bookworm.md; ...`.
 Then:
@@ -259,7 +279,8 @@ docker compose exec app python scripts/verify_pr_ledger.py bookworm   # FAILURES
 ```
 
 A `PUSH_FAILED` here means the SSH key's account cannot push to
-`Arrcus/mstpd`; nothing else was changed.
+`Arrcus/mstpd`; nothing else was changed. `stopped: Pushing is disabled on this
+machine ...` means `APM_ALLOW_PUSH` is not set (step 1); nothing was pushed.
 
 ### 7. Lakshya opens the pull request
 
@@ -267,9 +288,9 @@ A `PUSH_FAILED` here means the SSH key's account cannot push to
 cat out/upstream-md-pr-links-bookworm.md
 ```
 
-Lakshya, signed in to GitHub, opens the `mstpd` **Link**. GitHub's
-**Open a pull request** form appears with base `aminor`, the branch, the title
-and the description filled in. Check **Files changed** shows one file, then
+Lakshya, signed in to GitHub, opens the `mstpd` **Link** (or its
+**Compare Link**). GitHub's **Open a pull request** form appears with base
+`aminor`, the branch, the title and the description filled in. Check **Files changed** shows one file, then
 click **Create pull request** (or **Create draft pull request** from the
 button's menu). If the form has no description, paste it from the links file.
 
@@ -280,10 +301,11 @@ reviewers agree with the recorded upstream. Merge it on GitHub - the tool
 never merges. ARCoS's merge workflow may then cherry-pick it to other release
 branches.
 
-Without a token the tool cannot see the PR, so the ledger keeps `mstpd` as
-`BRANCH_PUSHED`. That is expected. A later run with a token records it
-(`PR_EXISTS` or `PR_MERGED`; `NO_CHANGE` once GitHub has deleted the branch
-after the merge, because `aminor` then has the file) without pushing again. If
+Without a token the tool cannot see the PR's state, so the ledger keeps
+`mstpd` as `BRANCH_PUSHED`. That is expected. A later `--apply --recheck` run
+with a token records it (`PR_EXISTS` or `PR_MERGED`; `NO_CHANGE` once GitHub
+has deleted the branch after the merge, because `aminor` then has the file)
+without pushing again. If
 upstream `master` gained a commit in the meantime, that run reports `DRIFT`
 instead and the ledger keeps `BRANCH_PUSHED`: re-run `resolve-release` and
 `generate-upstream-md` (the file comes out the same), review, and run again.
@@ -294,12 +316,12 @@ Only after `mstpd` is merged and nothing about it needed changing.
 
 ```bash
 # Dry run of everything else: all DRY_RUN_OK. mstpd is not processed: a
-# push-only run leaves a BRANCH_PUSHED package alone ("pushed, waiting for a PR 1").
-docker compose exec app apm publish-upstream-md --release bookworm --all --push-only
+# run leaves a BRANCH_PUSHED package alone ("pushed, waiting for a PR 1").
+docker compose exec app apm publish-upstream-md --release bookworm --all
 
 # A first batch of 5. --confirm-count must equal the batch; mstpd is not counted.
 docker compose exec app apm publish-upstream-md --release bookworm --all --limit 5 \
-  --push-only --apply --confirm-count 5
+  --apply --confirm-count 5
 ```
 
 Lakshya opens each link in `out/upstream-md-pr-links-bookworm.md`, which lists
@@ -312,25 +334,31 @@ required, and `--exclude` for any package held back
 ### 10. Check the result
 
 ```bash
-cat out/upstream-md-pr-results-bookworm.md       # every package: status, branch, link
+cat out/upstream-md-pr-results-bookworm.md       # every package: status, branch, Compare Link
 docker compose exec app python scripts/verify_pr_ledger.py bookworm
+docker compose exec app apm upstream-md-report --verify   # every pushed branch read back from GitHub
+cat out/upstream-md-publishing-report.md          # Bookworm and Trixie: pushed, covered, not pushed
 ```
 
 - `BRANCH_PUSHED`: open its link (if not done yet), review and merge on
   GitHub.
+- `COVERED`: nothing to do - another release's branch carries the same file
+  to the same target.
 - `PUSH_FAILED` / `ERROR`: fix the cause, then
-  `docker compose exec app apm publish-upstream-md --release bookworm --all --retry-failed --push-only --apply --confirm-count N`.
+  `docker compose exec app apm publish-upstream-md --release bookworm --all --retry-failed --apply --confirm-count N`.
 - `DRIFT`, `CONFLICT`, `BRANCH_EXISTS`, `PR_CLOSED`: stop for a person - see
   [upstream-md-publishing.md](upstream-md-publishing.md#statuses).
 
-### Alternative: the token route
+### Optional: a read-only token
 
-If Lakshya creates a token instead, the tool opens the PRs itself:
+A token never makes the tool open a pull request: there is no token route.
+It only lets the tool read - the state of a pull request opened from a link,
+and its CI checks:
 
-1. On GitHub, as the account that should open the PRs: a fine-grained token -
-   resource owner **Arrcus**, repository access to the ARCoS package
-   repositories, permissions **Pull requests: Read and write** and
-   **Metadata: Read**, with an expiry date. If Arrcus enforces SAML SSO,
+1. On GitHub: a fine-grained token - resource owner **Arrcus**, repository
+   access to the ARCoS package repositories, permissions
+   **Pull requests: Read**, **Metadata: Read**, **Checks: Read** and
+   **Commit statuses: Read**, with an expiry date. If Arrcus enforces SAML SSO,
    authorise it.
 2. On the server, with an editor - never `echo`, `export`, chat or a ticket:
    `nano .env` (set `APM_GITHUB_TOKEN=<the token>`), `chmod 600 .env`, then
@@ -338,18 +366,14 @@ If Lakshya creates a token instead, the tool opens the PRs itself:
 3. `docker compose exec app apm doctor --repo Arrcus/mstpd` - expect
    `PASS  APM_GITHUB_TOKEN is set`, `PASS  token can see Arrcus/mstpd` and
    `FAILURES: none`.
-4. The steps above without `--push-only`: the dry run, then
-   `apm publish-upstream-md --release bookworm --package mstpd --apply --confirm mstpd`,
-   which ends `PR_OPENED` with `https://github.com/Arrcus/mstpd/pull/<n>`.
-   Batches can then use `--all --limit 5 --apply --confirm-count 5`.
 
-A package already `BRANCH_PUSHED` from the push-only route is picked up by
-the first token run, and counted in its `--confirm-count`: its branch is not
-pushed again, and its PR is opened, or found (`PR_EXISTS`, `PR_MERGED`,
-`PR_CLOSED`; `NO_CHANGE` once GitHub has deleted a merged branch). If its
-upstream branch moved while it waited, that run reports `DRIFT` and the ledger
-keeps `BRANCH_PUSHED`; re-run `resolve-release` and `generate-upstream-md`,
-review, and run again.
+The dashboard's pull request and CI panel then shows each PR's state and
+checks. `--apply --recheck` records the pull requests opened from the links
+(`PR_EXISTS`, `PR_MERGED`, `PR_CLOSED`; `NO_CHANGE` once GitHub has deleted a
+merged branch) without pushing again; it counts the `BRANCH_PUSHED` packages
+in its `--confirm-count`. If a package's upstream branch moved while it waited,
+that run reports `DRIFT` and the ledger keeps `BRANCH_PUSHED`; re-run
+`resolve-release` and `generate-upstream-md`, review, and run again.
 
 ### Later
 
@@ -359,5 +383,8 @@ review, and run again.
   run and a review. The five `CURATED_CONFLICT` ones must also be removed from
   `upstream_md_publish.exclude` ([configuration.md](configuration.md#upstream_md_publishexclude)).
 - Trixie runs through the same commands with `--release trixie` and
-  `--branch aminor-trixie`.
+  `--branch aminor-trixie`, on its own branch name
+  (`debian-upstream-tracking-trixie`). A Trixie package that ships from
+  `aminor` (generated without `--branch`) and has the same file as Bookworm
+  ends `COVERED`: Bookworm's branch and pull request serve both.
 - With a token: rotate it before it expires (`.env`, then `--force-recreate`).

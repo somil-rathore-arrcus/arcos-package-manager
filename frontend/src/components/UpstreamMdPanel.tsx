@@ -176,9 +176,9 @@ export function UpstreamMdPanel({
           <BranchLinks result={pushed} />
           {pushed.pr_create_url && !hasBody(pushed.pr_create_url) && (
             <p className="small">
-              The description was too long for the link. A push-only dry run
+              The description was too long for the link. A dry run
               (<code>apm publish-upstream-md --release {pushed.release} --package{' '}
-              {pushed.package} --push-only</code>) writes it to{' '}
+              {pushed.package}</code>) writes it to{' '}
               <code>out/upstream-md-pr-links-dryrun-{pushed.release}.md</code>; paste it
               on the form before creating the pull request.
             </p>

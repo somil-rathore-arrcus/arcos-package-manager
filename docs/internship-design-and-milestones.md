@@ -44,9 +44,10 @@ guesswork.
 | Safe cherry-pick preview in a throwaway workspace | Release decision-making |
 | Excel/CSV mapping reports and `debian/upstream.md` generation | |
 
-The deployment on the VM is currently **read-only**: no GitHub token is
-configured, so every write path (push, PR) is intentionally disabled and the
-dashboard reports this rather than failing at the last step.
+The tool never opens a pull request anywhere. Branches are pushed only by the
+deployment on Lakshya's machine, the one place `APM_ALLOW_PUSH` is set; any
+other copy is read-only, and the dashboard says so rather than failing at the
+last step.
 
 ---
 
@@ -151,9 +152,9 @@ Public API surface (all under `/api`; full schema at `/docs`):
 | GET | `/commits/{package}` | Commit lists alone |
 | POST | `/patches/preview` | Safe preview; writes nothing |
 | POST | `/patches/cherry-pick` | New branch; pushes only if asked |
-| POST/GET | `/pull-requests`, `/pull-requests/{number}` | Pull requests (token-gated) |
+| POST/GET | `/pull-requests`, `/pull-requests/{number}` | POST always refused (`PULL_REQUESTS_DISABLED`): the tool never opens a PR. GET looks one up (token) |
 | POST | `/upstream-md/generate` | Render `debian/upstream.md` |
-| POST | `/upstream-md/pr` | Propose it; requires `confirm: true` |
+| POST | `/upstream-md/pr` | Push it from the reviewed plan; requires `confirm: true`; never opens a PR |
 | GET | `/reports`, `/reports/{name}` | Generated mapping reports |
 
 ### 3.2 Service layer (`src/apm/services/`)
@@ -167,7 +168,7 @@ Public API surface (all under `/api`; full schema at `/docs`):
 | `patch_id_service.py` | `git patch-id --stable` computation and matching for backport detection |
 | `criticality_service.py` | Evidence-based criticality assessment per commit |
 | `patch_service.py` | Preview in a throwaway workspace; cherry-pick onto a new branch |
-| `github_service.py` | GitHub REST access (PR creation/lookup) — token-gated, disabled in the current deployment |
+| `github_service.py` | GitHub REST access, read-only (PR and CI lookup, token-gated); never creates a pull request |
 | `upstream_md_service.py` | Deterministic `debian/upstream.md` rendering and diffing |
 | `metadata_batch_service.py` | Drives `upstream.md` generation across a whole release; read-only against remotes |
 | `adapters.py` | Pipeline objects → domain models |
@@ -483,7 +484,7 @@ flowchart TD
     X["Conflict: series stops at the offending commit,<br/>conflicting paths reported,<br/>workspace destroyed, nothing written"]
     K["POST /api/patches/cherry-pick — explicit<br/>new branch upstream/PACKAGE/YYYYMMDD-HHMMSS"]
     U["Push — only when push=true"]
-    R["POST /api/pull-requests — separate call, token required"]
+    R["Pull request — opened by a person from the pushed branch's link;<br/>the tool never opens one"]
 
     S --> P --> C
     C -->|no| X
@@ -544,7 +545,7 @@ flowchart LR
 | Ancestry probe results | `$APM_CACHE_DIR/ancestry` | cache |
 | Git workspaces | `$APM_WORKSPACE_DIR` (on the git host) | cache |
 | Mapping reports | `out/upstream-mapping*.{csv,xlsx}` | yes |
-| `debian/upstream.md` + plan | `out/upstream-md/`, `out/upstream-md-plan-<release>.{json,md}` | yes |
+| `debian/upstream.md` + plan | `out/upstream-md-<release>/`, `out/upstream-md-plan-<release>.{json,md}` | yes |
 
 Resolutions are cached in memory for 15 minutes; comparisons are recomputed, but
 the workspace is reused, which takes a repeat comparison from minutes to
@@ -567,10 +568,12 @@ tool did not write is never overwritten.**
 
 The application is deployed on the project VM under Docker Compose, with the
 frontend published on port **8080** and the backend reachable only through it.
-`APM_GITHUB_TOKEN` is intentionally left empty, which makes the deployment
-read-only: the mapping, comparison, workbook, preview and `upstream.md`
-workflows all work without it, and the dashboard reports *"Read-only mode,
-GitHub write operations disabled"* rather than failing at the last step.
+`APM_GITHUB_TOKEN` is left empty: the mapping, comparison, workbook, preview
+and `upstream.md` workflows all work without it, and pull requests are found
+from git refs. `APM_ALLOW_PUSH` is set only on Lakshya's machine, the one
+deployment that pushes branches; anywhere else the dashboard reports *"Pushing
+is disabled on this deployment"* rather than failing at the last step. No
+deployment opens a pull request, with or without a token.
 
 ### Boundaries enforced by construction
 
@@ -578,8 +581,8 @@ GitHub write operations disabled"* rather than failing at the last step.
 |---|---|
 | Target branch is never modified | Cherry-pick always creates a new branch; the API refuses a request whose branch equals the base |
 | Preview writes nothing | Runs in a throwaway workspace, destroyed afterwards |
-| Nothing is pushed implicitly | Push requires `push: true`; PR creation is a separate call requiring a token |
-| `upstream.md` PRs require intent | `/upstream-md/pr` requires `confirm: true` |
+| Nothing is pushed implicitly | Push requires `push: true` (or `confirm: true`) and a machine with `APM_ALLOW_PUSH`; no pull request is ever opened - the GitHub client only reads |
+| `upstream.md` pushes require intent | `/upstream-md/pr` requires `confirm: true` and publishes only the reviewed plan |
 | Existing `upstream.md` is respected | A file the tool did not write is never overwritten |
 | No conflict is auto-resolved | The series aborts; there is no force option |
 | No commit is called critical without evidence | Criticality requires a CVE, advisory, `Cc: stable` or `Fixes:` |

@@ -18,6 +18,7 @@ All commands run on the server, from the checkout directory
 | Restart the process | `docker compose restart` |
 | Apply a `.env` change | `docker compose up -d --force-recreate` |
 | Run a CLI command | `docker compose exec app apm <command>` |
+| Publishing report, both releases | `docker compose exec app apm upstream-md-report [--verify]` → `out/upstream-md-publishing-report.md` |
 
 `docker compose stop` / `down` send `SIGTERM`; uvicorn shuts down gracefully
 within seconds. Docker reports exit code 143 for that, which is normal.
@@ -64,17 +65,19 @@ the backlog to the pull request body and do not change the file.
 ## Logs
 
 The startup lines state the user, port, git backend, whether an SSH key and a
-token are configured (never their values), and where the workspace, output
-and mapping are. Request lines follow (`GET /health ... 200`). No log line
+token are configured (never their values), whether this machine pushes
+(`APM_ALLOW_PUSH`; pull requests are never opened), and where the workspace,
+output and mapping are. Request lines follow (`GET /health ... 200`). No log line
 contains a secret.
 
 ## What to back up
 
 | What | Where | Back up? |
 |---|---|---|
-| Results ledger - the record of every branch and PR the tool created | `out/upstream-md-pr-results-*.{json,md}` | **Yes - never edit or delete** |
+| Results ledger - the record of every branch the tool pushed, and of each PR found for one | `out/upstream-md-pr-results-*.{json,md}` | **Yes - never edit or delete** |
 | Content-base approvals | `out/approvals.yaml` | **Yes** |
-| Push-only links | `out/upstream-md-pr-links-*.md` | Useful; the next push-only apply rewrites the file from the results ledger without pushing anything already pushed |
+| PR links | `out/upstream-md-pr-links-*.md` | Useful; the next apply, or a push from the dashboard, rewrites the file from the results ledger without pushing anything already pushed |
+| Publishing report and its verification | `out/upstream-md-publishing-report.{md,json}`, `out/upstream-md-publishing-verification.json` | Useful; `apm upstream-md-report` rebuilds the report from the plans and ledgers, and `--verify` re-checks the branches |
 | Mapping, plan, generated files, snapshots | rest of `out/` | Useful; can be regenerated |
 | `.env` | checkout directory | Keep a private copy of the non-secret values; the token can be re-issued |
 | Git clones | workspace directory | No - regenerable |
