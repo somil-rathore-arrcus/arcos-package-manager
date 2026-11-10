@@ -136,6 +136,7 @@ def test_a_non_github_repository_is_refused():
 
 @pytest.mark.parametrize("branch", [
     "debian-upstream-tracking", "debian-upstream-tracking/trixie",
+    "debian-upstream-tracking-trixie",
 ])
 def test_the_repository_wide_tracking_branch_can_be_looked_up(branch):
     validate_own_branch(branch)
@@ -143,7 +144,22 @@ def test_the_repository_wide_tracking_branch_can_be_looked_up(branch):
 
 @pytest.mark.parametrize("branch", [
     "debian-upstream-trackingx", "debian-upstream-tracking/../aminor",
+    "debian-upstream-tracking-x", "debian-upstream-tracking-Trixie",
+    "debian-upstream-tracking-trixie;rm",
 ])
 def test_near_misses_of_the_tracking_branch_are_refused(branch):
     with pytest.raises(PublishStatusError):
+        validate_own_branch(branch)
+
+
+def test_every_branch_the_shipped_settings_push_to_can_be_looked_up():
+    """The dashboard asks for the status of each branch the publisher pushed, so
+    the two rules must agree - trixie's own branch was once refused here."""
+    from apm.config import load_settings
+    from apm.services.upstream_md_publisher import in_namespace
+    publish = load_settings().upstream_md_publish
+    templates = [publish["branch_template"], *publish["release_branch_templates"].values()]
+    for template in templates:
+        branch = template.format(release="trixie", package="mstpd")
+        assert in_namespace(branch)
         validate_own_branch(branch)

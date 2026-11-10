@@ -27,9 +27,11 @@ from .github_service import GitHubError, repo_slug
 log = logging.getLogger(__name__)
 
 # Branches this tool creates: debian/upstream.md proposals and patch series.
+# debian-upstream-tracking-<release> follows the publisher's rule for a
+# release's own branch (upstream_md_publisher._TRACKING_RELEASE).
 _OWN_BRANCH = re.compile(
     r"^(?:(?:upstream-metadata|upstream)/[A-Za-z0-9._/-]+"
-    r"|debian-upstream-tracking(?:/[A-Za-z0-9._/-]+)?)$"
+    r"|debian-upstream-tracking(?:-[a-z][a-z0-9]{2,}|/[A-Za-z0-9._/-]+)?)$"
 )
 _PULL_HEAD = re.compile(r"^refs/pull/(\d+)/head$")
 
@@ -48,7 +50,8 @@ def validate_own_branch(branch: str) -> None:
         raise PublishStatusError(
             ErrorCode.INVALID_REQUEST,
             f"{branch!r} is not a branch this tool creates (upstream-metadata/..., "
-            f"debian-upstream-tracking or upstream/...).",
+            f"debian-upstream-tracking, debian-upstream-tracking-<release> or "
+            f"upstream/...).",
         )
 
 
