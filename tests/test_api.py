@@ -719,6 +719,8 @@ def test_reports_are_listed_from_disk(app_container, tmp_path, monkeypatch):
 
     (tmp_path / "upstream-mapping-bookworm.xlsx").write_bytes(b"xlsx")
     (tmp_path / "upstream-mapping.csv").write_text("Package\n")
+    (tmp_path / "upstream-md-publishing-report.md").write_text("# report\n")
+    (tmp_path / "upstream-md-publishing-verification.json").write_text("{}")
     (tmp_path / "notes.txt").write_text("not a report")
     monkeypatch.setattr(reports_route, "OUT_DIR", tmp_path)
 
@@ -726,7 +728,8 @@ def test_reports_are_listed_from_disk(app_container, tmp_path, monkeypatch):
     body = client.get("/api/reports").json()
 
     names = {r["name"] for r in body}
-    assert names == {"upstream-mapping-bookworm.xlsx", "upstream-mapping.csv"}
+    assert names == {"upstream-mapping-bookworm.xlsx", "upstream-mapping.csv",
+                     "upstream-md-publishing-report.md"}
     release = {r["name"]: r["release"] for r in body}
     assert release["upstream-mapping-bookworm.xlsx"] == "bookworm"
     assert release["upstream-mapping.csv"] == ""

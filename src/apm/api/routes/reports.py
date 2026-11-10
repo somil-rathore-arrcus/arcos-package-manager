@@ -25,7 +25,11 @@ OUT_DIR = Path(ROOT) / "out"
 # What a generated report is allowed to be called and to contain.
 _PATTERNS = ("upstream-mapping*.csv", "upstream-mapping*.xlsx",
              "upstream-resolutions.json",
-             "upstream-md-plan-*.json", "upstream-md-plan-*.md")
+             "upstream-md-plan-*.json", "upstream-md-plan-*.md",
+             # The consolidated Bookworm/Trixie publishing report: every
+             # pushed branch with its file and Compare Link.
+             "upstream-md-publishing-report.md",
+             "upstream-md-publishing-report.json")
 
 _MEDIA_TYPES = {
     ".csv": "text/csv",
