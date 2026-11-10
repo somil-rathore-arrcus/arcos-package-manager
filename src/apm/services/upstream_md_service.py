@@ -78,7 +78,8 @@ class BranchField:
 
     `verified` is True only when the value is a branch recorded evidence names:
     the branch the mapping recorded, or - for a tag-only mapping - the upstream
-    default branch the ancestry probe measured as holding the fork's base. Then
+    default branch, or the branch config/overrides.yaml names, that the ancestry
+    probe measured as holding the fork's base. Then
     `tag` keeps the tag it was derived from and `basis` says what the probe
     measured. A tag is a fixed point, not something the fork can track, so it is
     never itself written as a branch; with no such measurement a tag-only
@@ -174,15 +175,17 @@ def branch_field(resolution: UpstreamResolution) -> BranchField:
 def _branch_holding_base(resolution: UpstreamResolution, tag: str):
     """The upstream branch a tag-only fork follows, as (branch, basis), or None.
 
-    The ancestry probe measures the repository's default branch against the
-    same ARCoS commit as the tag, and both measurements are kept as candidates.
-    When that branch shares history with the fork and the fork has no more
-    commits outside it than outside the tag, the branch holds all of the fork's
-    upstream history the tag accounts for, and usually more: the fork sits on
-    that line, often past the release Debian ships. A fork taken from a side
-    branch has commits the default branch lacks, so it has more outside the
-    branch than outside its tag and does not qualify; neither does a branch the
-    probe did not measure.
+    The ancestry probe measures the repository's default branch - and the
+    branch config/overrides.yaml names, which is recorded instead when it is
+    the same ref - against the same ARCoS commit as the tag, and every
+    measurement is kept as a candidate. When such a branch shares history with
+    the fork and the fork has no more commits outside it than outside the tag,
+    the branch holds all of the fork's upstream history the tag accounts for,
+    and usually more: the fork sits on that line, often past the release Debian
+    ships. A fork taken from a side branch has commits the branch lacks, so it
+    has more outside the branch than outside its tag and does not qualify;
+    neither does a branch the probe did not measure. Of two that qualify, the
+    one with fewer commits outside it wins, then the one a person named.
     """
     upstream = resolution.upstream_repository
     url = _clean(upstream.url if upstream else "")
@@ -193,19 +196,30 @@ def _branch_holding_base(resolution: UpstreamResolution, tag: str):
                 and c.arcos_only is not None]
     tagged = next((c for c in measured
                    if c.kind == "tag" and _clean(c.ref) == tag), None)
-    branch = next((c for c in measured
-                   if c.strategy is RefStrategy.DEFAULT_BRANCH
-                   and c.kind == "branch" and _clean(c.ref) not in ("", "HEAD")),
-                  None)
-    if tagged is None or branch is None or branch.arcos_only > tagged.arcos_only:
+    if tagged is None:
         return None
+    branches = [c for c in measured
+                if c.strategy in _BRANCH_ROLES and c.kind == "branch"
+                and _clean(c.ref) not in ("", "HEAD")
+                and c.arcos_only <= tagged.arcos_only]
+    if not branches:
+        return None
+    branch = min(branches, key=lambda c: (c.arcos_only,
+                                          c.strategy is not RefStrategy.CURATED))
     ref = _clean(branch.ref)
     return ref, (
-        f"the ancestry probe measured {ref}, the upstream default branch, "
+        f"the ancestry probe measured {ref}, {_BRANCH_ROLES[branch.strategy]}, "
         f"against the same ARCoS commit: it shares history, and the fork has "
         f"{branch.arcos_only} commit(s) outside {ref} against "
         f"{tagged.arcos_only} outside {tag}"
     )
+
+
+# The branches a tag-only file may name instead of N/A, and how each is described.
+_BRANCH_ROLES = {
+    RefStrategy.DEFAULT_BRANCH: "the upstream default branch",
+    RefStrategy.CURATED: "the branch config/overrides.yaml names",
+}
 
 
 def review_flags(resolution: UpstreamResolution) -> List[ReviewFlag]:

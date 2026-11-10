@@ -294,6 +294,53 @@ def test_without_a_measurement_of_the_default_branch_the_tag_stays_n_a(candidate
     assert BRANCH_FROM_TAG not in _codes(resolution)
 
 
+def _netfilterqueue(branch_outside=14, extra=()):
+    """python-netfilterqueue on trixie: v1.1.0 selected, and master measured -
+    but recorded as the curated ref, because overrides.yaml names master and it
+    is also the repository's default branch."""
+    url = "https://github.com/oremanj/python-netfilterqueue.git"
+    return _tag_only(
+        "v1.1.0", package="python-netfilterqueue",
+        upstream_repository=Repository(url=url),
+        candidates=[
+            _measured("v1.1.0", "tag", RefStrategy.EXACT_TAG, 14, repository=url),
+            _measured("master", "branch", RefStrategy.CURATED, branch_outside,
+                      repository=url),
+            *extra,
+        ])
+
+
+def test_a_branch_overrides_yaml_names_counts_when_measured():
+    field = branch_field(_netfilterqueue())
+    assert (field.value, field.tag, field.verified) == ("master", "v1.1.0", True)
+    assert "master, the branch config/overrides.yaml names" in field.basis
+    assert _codes(_netfilterqueue()) == [BRANCH_FROM_TAG]
+
+
+def test_a_named_branch_with_more_outside_than_the_tag_keeps_the_tag():
+    assert branch_field(_netfilterqueue(branch_outside=15)).value == (
+        "N/A - no upstream branch verified; upstream tag v1.1.0")
+
+
+@pytest.mark.parametrize("default_outside,named_outside,want", [
+    (10, 14, "main"),     # the default branch is closer to the fork
+    (14, 10, "master"),   # the named branch is closer
+    (14, 14, "master"),   # a tie goes to the branch a person named
+])
+def test_of_two_qualifying_branches_the_closer_then_the_named_wins(
+        default_outside, named_outside, want):
+    url = "https://github.com/oremanj/python-netfilterqueue.git"
+    resolution = _netfilterqueue(
+        branch_outside=named_outside,
+        extra=[_measured("main", "branch", RefStrategy.DEFAULT_BRANCH,
+                         default_outside, repository=url)])
+    assert branch_field(resolution).value == want
+    row = _tag_row("v1.1.0", **{"Upstream Repository": url})
+    value = parse_fields(SERVICE.render(resolution))
+    assert VERIFY.field_problems("python-netfilterqueue", row, value,
+                                 _as_json(resolution)) == []
+
+
 def test_a_branch_from_the_probe_still_reports_the_missing_base_tag():
     """libpam-radius-auth: based before release_2_0_0, on master."""
     resolution = VARIANTS["branch from the probe, tag not in the fork"]
@@ -635,6 +682,8 @@ def _as_json(resolution):
     (VARIANTS["branch from the probe, tag not in the fork"],
      _tag_row("release_2_0_0", "no")),
     (_probed(79, 79, "libnl3_7_0", "main"), _tag_row("libnl3_7_0")),
+    (_netfilterqueue(), _tag_row("v1.1.0", **{
+        "Upstream Repository": "https://github.com/oremanj/python-netfilterqueue.git"})),
     # Measured, but not qualifying: the N/A form is still what is required.
     (_probed(20, 21), _tag_row()),
 ])

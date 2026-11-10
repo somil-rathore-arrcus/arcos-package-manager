@@ -45,14 +45,16 @@ Current Upstream Branch: master
 ```
 
 A tag is a fixed point, not something a fork can track, so it is never written
-as if it were a branch. The probe measures the repository's default branch with
-the same ARCoS commit as the tag. When that branch shares history with the fork
+as if it were a branch. The probe measures the repository's default branch (and
+the branch `config/overrides.yaml` names, if any) with the same ARCoS commit as
+the tag. When that branch shares history with the fork
 and the fork has no more commits outside it than outside the tag (ethtool: 14
 outside `master`, 116 outside `v6.1`), the branch holds the fork's base: the
 file names it, and the `BRANCH_FROM_TAG` review flag says it was derived from a
 tag and gives both counts. A fork taken from a side branch has commits the
-default branch lacks, so it does not qualify. Without that measurement the file
-names the tag and says no branch was verified:
+default branch lacks, so it does not qualify. If two branches qualify, the one
+with fewer commits outside it wins, then the one `overrides.yaml` names. Without
+that measurement the file names the tag and says no branch was verified:
 
 ```text
 Current Upstream Branch: N/A - no upstream branch verified; upstream tag v6.1.0
@@ -81,7 +83,7 @@ The first row that applies:
 |---|---|---|
 | A status other than `VERIFIED` | `N/A - not verified (status <STATUS>)` | no |
 | An upstream branch | The branch, e.g. `master`, `main`, `linux-6.1.y` | yes |
-| An upstream tag and no branch, and the probe measured the upstream default branch against the same ARCoS commit as sharing history, with no more ARCoS commits outside it than outside the tag | That default branch, e.g. `master` (flagged `BRANCH_FROM_TAG`) | yes |
+| An upstream tag and no branch, and the probe measured the upstream default branch, or the branch `overrides.yaml` names, against the same ARCoS commit as sharing history, with no more ARCoS commits outside it than outside the tag | That branch, e.g. `master` (flagged `BRANCH_FROM_TAG`) | yes |
 | An upstream tag and no branch, otherwise | `N/A - no upstream branch verified; upstream tag <tag>` | no |
 | ... and the ARCoS fork does not contain that tag | The same, followed by ` (the ARCoS fork does not contain this tag)` | no |
 | Only a ref selection whose `ls-remote` kind is a branch (an older mapping) | That ref | yes |
@@ -276,7 +278,7 @@ a bug in the renderer cannot also be a bug in the check. It reads
 | every generated file has a mapping row | |
 | no file was generated for a NO_UPSTREAM package | |
 | every file has exactly the two fields and nothing else | Each file parses as the two fields and is laid out byte for byte as generated: one blank line between them, one trailing newline |
-| every field matches the mapping row | `Upstream Source` is the row's `Upstream Repository` (`N/A` if empty). If the row has an `Upstream Branch`, the branch field is that branch. Else if it has an `Upstream Tag` and the row's probe measurements in `out/upstream-resolutions.json` qualify the upstream default branch (restated from the renderer: same repository, shares history, no more ARCoS commits outside it than outside the tag), the branch field is exactly that branch. Else if it has an `Upstream Tag`, the branch field is exactly `N/A - no upstream branch verified; upstream tag <tag>`, followed by ` (the ARCoS fork does not contain this tag)` exactly when the row's `ARCoS Contains Base Tag` is `no` and its `Upstream Base Tag` is that tag (a CSV without those two columns accepts either form). Else it is exactly `N/A - no upstream branch verified`, or `N/A - no upstream branch verified; ref <ref> is not recorded as a branch or a tag`. Every comparison is of the whole value, so a longer tag, an added branch or a guess after `N/A` fails. For a row that is not `VERIFIED`, both fields are `N/A - not verified (status <STATUS>)` |
+| every field matches the mapping row | `Upstream Source` is the row's `Upstream Repository` (`N/A` if empty). If the row has an `Upstream Branch`, the branch field is that branch. Else if it has an `Upstream Tag` and the row's probe measurements in `out/upstream-resolutions.json` qualify a branch (restated from the renderer: the upstream default branch or the branch `overrides.yaml` names, same repository, shares history, no more ARCoS commits outside it than outside the tag; fewest outside wins, then the named branch), the branch field is exactly that branch. Else if it has an `Upstream Tag`, the branch field is exactly `N/A - no upstream branch verified; upstream tag <tag>`, followed by ` (the ARCoS fork does not contain this tag)` exactly when the row's `ARCoS Contains Base Tag` is `no` and its `Upstream Base Tag` is that tag (a CSV without those two columns accepts either form). Else it is exactly `N/A - no upstream branch verified`, or `N/A - no upstream branch verified; ref <ref> is not recorded as a branch or a tag`. Every comparison is of the whole value, so a longer tag, an added branch or a guess after `N/A` fails. For a row that is not `VERIFIED`, both fields are `N/A - not verified (status <STATUS>)` |
 | the plan pushed nothing / the plan created no pull request | `"pushed": false`, `"pull_requests_created": false` |
 | the plan covers exactly the generated files | |
 | no planned branch is the branch it targets | |

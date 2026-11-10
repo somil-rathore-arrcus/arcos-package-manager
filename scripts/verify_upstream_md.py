@@ -87,9 +87,11 @@ def shape_problem(package: str, text: str) -> Optional[str]:
 def held_branch(row: dict, tag: str, candidates) -> Optional[str]:
     """The branch a tag-only row's file names instead of N/A, or None.
 
-    The renderer's rule, restated: the upstream default branch the ancestry
-    probe measured against the same ARCoS commit, when it shares history with
-    the fork and the fork has no more commits outside it than outside the tag.
+    The renderer's rule, restated: the upstream default branch, or the branch
+    overrides.yaml names, that the ancestry probe measured against the same
+    ARCoS commit, when it shares history with the fork and the fork has no more
+    commits outside it than outside the tag. Fewest commits outside wins, then
+    the named branch.
     `candidates` are the row's probe measurements from upstream-resolutions.json;
     without them nothing can be derived, so only the N/A forms are allowed.
     """
@@ -99,12 +101,17 @@ def held_branch(row: dict, tag: str, candidates) -> Optional[str]:
                 and c.get("shares_history") and c.get("arcos_only") is not None]
     tagged = [c for c in measured
               if c.get("kind") == "tag" and (c.get("ref") or "").strip() == tag]
-    branch = [c for c in measured
-              if c.get("strategy") == "default_branch" and c.get("kind") == "branch"
-              and (c.get("ref") or "").strip() not in ("", "HEAD")]
-    if not tagged or not branch or branch[0]["arcos_only"] > tagged[0]["arcos_only"]:
+    if not tagged:
         return None
-    return branch[0]["ref"].strip()
+    branch = [c for c in measured
+              if c.get("strategy") in ("default_branch", "curated")
+              and c.get("kind") == "branch"
+              and (c.get("ref") or "").strip() not in ("", "HEAD")
+              and c["arcos_only"] <= tagged[0]["arcos_only"]]
+    if not branch:
+        return None
+    best = min(branch, key=lambda c: (c["arcos_only"], c.get("strategy") != "curated"))
+    return best["ref"].strip()
 
 
 def field_problems(package: str, row: dict, value: Dict[str, str],
