@@ -17,7 +17,8 @@ Host machine ─ Docker Compose ─ app container
              ┌─────────────────────────┼──────────────────────────────┐
              ▼                         ▼                              ▼
    GitHub over SSH              HTTPS: Debian archive,         HTTPS: GitHub REST API
-   (Arrcus forks, push)         upstream projects, OSV.dev     (only to find/open PRs; token)
+   (Arrcus forks; push only     upstream projects, OSV.dev     (GET only: find PRs, read CI;
+    with APM_ALLOW_PUSH)                                        optional token; never opens a PR)
 ```
 
 One container, one process. The dashboard and the API share one origin and one
@@ -32,9 +33,9 @@ Seven things are easy to confuse. They are separate on purpose.
 | **Docker runtime** | The `app` container, built from image `arcos-package-manager:latest`: Python, the application, git, ssh and the built dashboard. Runs as an unprivileged user with a read-only filesystem | On the host, managed by Docker Compose | `docker compose up -d --build` (rebuild) | contain a secret; be edited in place |
 | **Host machine** | The Linux server that runs Docker and holds the checkout, `.env`, the SSH key and the data directories | Production: `/home/lakshya/somil/arcos-package-manager` | `git pull`, editing `.env` | run a second copy of the server on the same port |
 | **Browser / client** | Whoever opens the dashboard or calls the API | Any machine that can reach `<server-ip>:8080` | - | need git, a key or a token: the server does all git and GitHub work |
-| **SSH authentication** | The host's private key. Git uses it to fetch, clone, `ls-remote` and push | Host path in `APM_GIT_SSH_KEY_FILE`, mounted read-only at `/home/apm/.ssh/id_git` | Editing `.env`, then recreating the container | be copied into the image or the repository |
-| **GitHub API authentication** | `APM_GITHUB_TOKEN`. Used only for the REST API: look up a repository, find or open a pull request | `.env` on the host → the container's environment | Editing `.env`, then recreating the container | be printed, logged, committed or pasted anywhere |
-| **Generated runtime data** | Mapping, reports, `upstream.md` files, PR plan and ledgers, comparison snapshots, approvals, runtime `packages.yaml`; git clones; caches | `out/`, the workspace directory, the `apm-cache` volume | Every run | be committed (they are gitignored) |
+| **SSH authentication** | The host's private key. Git uses it to fetch, clone, `ls-remote` and push - push only where `APM_ALLOW_PUSH` is set (the deployment on Lakshya's machine) | Host path in `APM_GIT_SSH_KEY_FILE`, mounted read-only at `/home/apm/.ssh/id_git` | Editing `.env`, then recreating the container | be copied into the image or the repository |
+| **GitHub API authentication** | `APM_GITHUB_TOKEN`, optional. Used only to read the REST API: look up a repository, find a pull request a person opened, read CI. Never to open one: the client makes `GET` requests only | `.env` on the host → the container's environment | Editing `.env`, then recreating the container | be printed, logged, committed or pasted anywhere |
+| **Generated runtime data** | Mapping, reports, `upstream.md` files, PR plan, ledgers, links files and the publishing report, comparison snapshots, approvals, runtime `packages.yaml`; git clones; caches | `out/`, the workspace directory, the `apm-cache` volume | Every run | be committed (they are gitignored) |
 | **Source and configuration** | Code, `Dockerfile`, `docker-compose.yml`, `config/*.yaml`, docs | This git repository | Pull requests to `arcos-package-manager` | contain a secret or a machine-specific value |
 
 The SSH key and the token are different credentials for different jobs; neither
@@ -122,9 +123,14 @@ Applying patches and publishing:
 ```
 POST /api/patches/preview        throwaway workspace, destroyed afterwards
 POST /api/patches/cherry-pick    a NEW branch from the target; pushes only with push=true
-POST /api/pull-requests          a separate, explicit call
-POST /api/upstream-md/pr         the same publisher as `apm publish-upstream-md`
+POST /api/pull-requests          refused, always (403 PULL_REQUESTS_DISABLED)
+POST /api/upstream-md/pr         the same reviewed plan and publisher as `apm publish-upstream-md`
 ```
+
+Every push goes through a git workspace that refuses it unless `APM_ALLOW_PUSH`
+is set (`PUSH_DISABLED`), and ends at the pushed branch: the response carries
+the Compare Link and the pre-filled link a person opens the pull request from.
+Nothing in the application writes to the GitHub API.
 
 ## Where state lives
 
@@ -135,9 +141,12 @@ No database. The durable files:
 | Release mapping (CSV, XLSX), all-release mapping | `out/upstream-mapping*.{csv,xlsx}` | `/app/out/` |
 | Full-fidelity mapping (read by the dashboard) | `out/upstream-resolutions.json` | `/app/out/` |
 | Comparison snapshots | `out/comparisons/<release>/<package>/<key>.json` | `/app/out/comparisons/` |
-| Generated `debian/upstream.md` files | `out/upstream-md/<package>/debian/upstream.md` | `/app/out/upstream-md/` |
+| Generated `debian/upstream.md` files (reviewed) | `out/upstream-md-<release>/<package>/debian/upstream.md` | `/app/out/upstream-md-<release>/` |
+| Dashboard drafts (`write_local`) | `out/upstream-md-drafts/<package>__<release>.md` | `/app/out/upstream-md-drafts/` |
 | PR plan | `out/upstream-md-plan-<release>.{json,md}` | `/app/out/` |
 | PR ledgers (real / dry run) | `out/upstream-md-pr-results-<release>.*`, `out/upstream-md-pr-dryrun-<release>.*` | `/app/out/` |
+| Links files (real / dry run) | `out/upstream-md-pr-links-<release>.md`, `out/upstream-md-pr-links-dryrun-<release>.md` | `/app/out/` |
+| Publishing report, all releases | `out/upstream-md-publishing-report.{md,json}`, `out/upstream-md-publishing-verification.json` | `/app/out/` |
 | Content-base approvals | `out/approvals.yaml` | `APM_APPROVALS_FILE` |
 | Runtime package catalogue | `out/packages.yaml` | `APM_PACKAGES_FILE` |
 | Git clones, probe workdirs | the workspace directory (`APM_WORKSPACE_HOST_DIR`) | `/var/tmp/arcos-package-manager` |

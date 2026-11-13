@@ -4,7 +4,8 @@ The file is two fields and nothing else, and every value in it is a recorded
 fact: a branch the mapping verified, or an N/A sentence that says exactly what
 is missing. A tag is never written up as a branch and an unverified candidate is
 never written at all - those are the two ways a plausible-looking file would be
-wrong, and most of these tests are about them.
+wrong, and most of these tests are about them. A tag-only mapping names a branch
+only where the probe measured the default branch as holding the fork's base.
 
 Determinism matters because the outcome is decided by comparing the render with
 what is already committed; if the render wobbled, every run would look like a
@@ -23,11 +24,12 @@ from apm.domain.enums import (
 )
 from apm.domain.models import (
     ComparisonSnapshot, PackageSource, RefSelection, Repository,
-    ResolutionEvidence, UpstreamResolution,
+    ResolutionEvidence, UpstreamCandidate, UpstreamResolution,
 )
 from apm.services.upstream_md_publisher import lint_content
 from apm.services.upstream_md_service import (
-    BASE_TAG_NOT_IN_FORK, BRANCH_LABEL, BRANCH_NOT_VERIFIED, FALLBACK_REF,
+    BASE_TAG_NOT_IN_FORK, BRANCH_FROM_TAG, BRANCH_LABEL, BRANCH_NOT_VERIFIED,
+    FALLBACK_REF,
     MAPPING_WARNINGS, MARKER, SOURCE_LABEL, TAG_ONLY, BranchField, ReviewFlag,
     UpstreamMdService, branch_field, classify, parse_fields, review_flags,
     source_field,
@@ -78,6 +80,32 @@ def _tag_only(tag="v6.1", contains=True, **overrides) -> UpstreamResolution:
     return _resolution(**values)
 
 
+ETHTOOL = "https://git.kernel.org/pub/scm/network/ethtool/ethtool.git"
+
+
+def _measured(ref, kind, strategy, arcos_only, repository=ETHTOOL,
+              shares=True) -> UpstreamCandidate:
+    return UpstreamCandidate(
+        repository=repository, ref=ref, source=ResolutionMethod.ANCESTRY,
+        accepted=kind == "tag", shares_history=shares, strategy=strategy,
+        kind=kind, arcos_only=arcos_only)
+
+
+def _probed(tag_outside=116, branch_outside=14, tag="v6.1", branch="master",
+            extra=(), **overrides) -> UpstreamResolution:
+    """ethtool as the probe measured it: v6.1 selected, master measured too.
+
+    The fork has 116 commits outside v6.1 and 14 outside master - it sits on
+    master, well past the release Debian ships.
+    """
+    candidates = [
+        _measured(tag, "tag", RefStrategy.EXACT_TAG, tag_outside),
+        _measured(branch, "branch", RefStrategy.DEFAULT_BRANCH, branch_outside),
+        *extra,
+    ]
+    return _tag_only(tag, candidates=candidates, **overrides)
+
+
 def _ifupdown2() -> UpstreamResolution:
     """A branch, but reached by falling back, with a warning recorded."""
     return _resolution(
@@ -100,6 +128,9 @@ VARIANTS = {
     "tag only, from the ref selection": _tag_only(upstream_tag=None),
     "tag not in the fork": _tag_only("release_2_0_0", contains=False,
                                      package="libpam-radius-auth"),
+    "branch from the tag's probe": _probed(),
+    "branch from the probe, tag not in the fork": _probed(
+        68, 68, "release_2_0_0", contains=False, package="libpam-radius-auth"),
     "branch from the ref selection": _resolution(
         upstream_branch=None,
         ref_selection=RefSelection(ref="master", kind="branch",
@@ -190,6 +221,137 @@ def test_the_fork_note_is_only_for_the_tag_actually_named():
         "N/A - no upstream branch verified; upstream tag v6.1"
     )
     assert BASE_TAG_NOT_IN_FORK in _codes(resolution)
+
+
+def test_a_tag_only_fork_on_the_default_branch_names_that_branch():
+    """ethtool: the fork has fewer commits outside master than outside v6.1."""
+    field = branch_field(_probed())
+    assert (field.value, field.branch, field.tag, field.verified) == (
+        "master", "master", "v6.1", True)
+    assert "14 commit(s) outside master against 116 outside v6.1" in field.basis
+    assert SERVICE.render(_probed()).endswith("Current Upstream Branch: master\n")
+
+
+def test_a_branch_from_a_tag_is_flagged_not_left_unverified():
+    flags = review_flags(_probed())
+    assert [f.code for f in flags] == [BRANCH_FROM_TAG]
+    detail = flags[0].detail
+    assert detail.startswith("the mapping selected upstream tag v6.1, not a "
+                             "branch; master is written because the ancestry "
+                             "probe measured master")
+    assert detail.endswith("; v6.1 is the tag for the shipped Debian version")
+
+
+def test_equal_counts_mean_the_fork_is_at_the_tag_on_the_branch():
+    """libnl3: nothing past libnl3_7_0, and libnl3_7_0 is on main."""
+    resolution = _probed(79, 79, "libnl3_7_0", "main", package="libnl3")
+    assert branch_field(resolution).value == "main"
+
+
+def test_a_fork_with_commits_the_default_branch_lacks_keeps_the_tag():
+    """A fork taken from a side branch has more outside master than outside
+    its tag; naming master would be a guess."""
+    resolution = _probed(tag_outside=20, branch_outside=21)
+    assert branch_field(resolution).value == (
+        "N/A - no upstream branch verified; upstream tag v6.1")
+    assert _codes(resolution) == [BRANCH_NOT_VERIFIED, TAG_ONLY]
+
+
+@pytest.mark.parametrize("candidates", [
+    # Nothing measured beyond the tag.
+    [_measured("v6.1", "tag", RefStrategy.EXACT_TAG, 116)],
+    # The default branch shares no history with the fork.
+    [_measured("v6.1", "tag", RefStrategy.EXACT_TAG, 116),
+     _measured("master", "branch", RefStrategy.DEFAULT_BRANCH, None, shares=False)],
+    # Measured, but the count is missing.
+    [_measured("v6.1", "tag", RefStrategy.EXACT_TAG, 116),
+     _measured("master", "branch", RefStrategy.DEFAULT_BRANCH, None)],
+    # No count for the tag to compare with.
+    [_measured("v6.1", "tag", RefStrategy.EXACT_TAG, None),
+     _measured("master", "branch", RefStrategy.DEFAULT_BRANCH, 14)],
+    # The placeholder used when the remote's HEAD could not be listed.
+    [_measured("v6.1", "tag", RefStrategy.EXACT_TAG, 116),
+     _measured("HEAD", "branch", RefStrategy.DEFAULT_BRANCH, 14)],
+    # The Debian packaging repository's branch is not the upstream's.
+    [_measured("v6.1", "tag", RefStrategy.EXACT_TAG, 116),
+     _measured("debian/latest", "branch", RefStrategy.PACKAGING_FALLBACK, 14,
+               repository="https://salsa.debian.org/kernel-team/ethtool.git")],
+    # Another repository's default branch.
+    [_measured("v6.1", "tag", RefStrategy.EXACT_TAG, 116),
+     _measured("master", "branch", RefStrategy.DEFAULT_BRANCH, 14,
+               repository="https://github.com/other/ethtool.git")],
+    # A non-default branch of the upstream: not what the rule measures.
+    [_measured("v6.1", "tag", RefStrategy.EXACT_TAG, 116),
+     _measured("v6.1-fixes", "branch", RefStrategy.MAINTENANCE_BRANCH, 14)],
+    # The default branch measured, but against a different tag.
+    [_measured("v6.0", "tag", RefStrategy.EXACT_TAG, 116),
+     _measured("master", "branch", RefStrategy.DEFAULT_BRANCH, 14)],
+])
+def test_without_a_measurement_of_the_default_branch_the_tag_stays_n_a(candidates):
+    resolution = _tag_only(candidates=candidates)
+    assert branch_field(resolution).value == (
+        "N/A - no upstream branch verified; upstream tag v6.1")
+    assert BRANCH_FROM_TAG not in _codes(resolution)
+
+
+def _netfilterqueue(branch_outside=14, extra=()):
+    """python-netfilterqueue on trixie: v1.1.0 selected, and master measured -
+    but recorded as the curated ref, because overrides.yaml names master and it
+    is also the repository's default branch."""
+    url = "https://github.com/oremanj/python-netfilterqueue.git"
+    return _tag_only(
+        "v1.1.0", package="python-netfilterqueue",
+        upstream_repository=Repository(url=url),
+        candidates=[
+            _measured("v1.1.0", "tag", RefStrategy.EXACT_TAG, 14, repository=url),
+            _measured("master", "branch", RefStrategy.CURATED, branch_outside,
+                      repository=url),
+            *extra,
+        ])
+
+
+def test_a_branch_overrides_yaml_names_counts_when_measured():
+    field = branch_field(_netfilterqueue())
+    assert (field.value, field.tag, field.verified) == ("master", "v1.1.0", True)
+    assert "master, the branch config/overrides.yaml names" in field.basis
+    assert _codes(_netfilterqueue()) == [BRANCH_FROM_TAG]
+
+
+def test_a_named_branch_with_more_outside_than_the_tag_keeps_the_tag():
+    assert branch_field(_netfilterqueue(branch_outside=15)).value == (
+        "N/A - no upstream branch verified; upstream tag v1.1.0")
+
+
+@pytest.mark.parametrize("default_outside,named_outside,want", [
+    (10, 14, "main"),     # the default branch is closer to the fork
+    (14, 10, "master"),   # the named branch is closer
+    (14, 14, "master"),   # a tie goes to the branch a person named
+])
+def test_of_two_qualifying_branches_the_closer_then_the_named_wins(
+        default_outside, named_outside, want):
+    url = "https://github.com/oremanj/python-netfilterqueue.git"
+    resolution = _netfilterqueue(
+        branch_outside=named_outside,
+        extra=[_measured("main", "branch", RefStrategy.DEFAULT_BRANCH,
+                         default_outside, repository=url)])
+    assert branch_field(resolution).value == want
+    row = _tag_row("v1.1.0", **{"Upstream Repository": url})
+    value = parse_fields(SERVICE.render(resolution))
+    assert VERIFY.field_problems("python-netfilterqueue", row, value,
+                                 _as_json(resolution)) == []
+
+
+def test_a_branch_from_the_probe_still_reports_the_missing_base_tag():
+    """libpam-radius-auth: based before release_2_0_0, on master."""
+    resolution = VARIANTS["branch from the probe, tag not in the fork"]
+    assert branch_field(resolution).value == "master"
+    assert _codes(resolution) == [BRANCH_FROM_TAG, BASE_TAG_NOT_IN_FORK]
+
+
+def test_an_unverified_mapping_never_shows_the_probed_branch():
+    resolution = _probed(status=ResolutionStatus.NEEDS_REVIEW)
+    assert branch_field(resolution).value == (
+        "N/A - not verified (status NEEDS_REVIEW)")
 
 
 def test_a_branch_recorded_only_by_the_ref_selection_is_used():
@@ -285,6 +447,13 @@ def test_a_fallback_branch_is_written_but_flagged():
 def test_mapping_warnings_are_joined_into_one_flag():
     flags = review_flags(_resolution(warnings=["first", "  ", "second"]))
     assert flags == [ReviewFlag(MAPPING_WARNINGS, "first; second")]
+
+
+def test_a_branch_from_a_tag_takes_the_tag_flags_place_in_the_order():
+    resolution = _probed(contains=False, warnings=["w"])
+    resolution.ref_selection.is_fallback = True
+    assert _codes(resolution) == [BRANCH_FROM_TAG, BASE_TAG_NOT_IN_FORK,
+                                  FALLBACK_REF, MAPPING_WARNINGS]
 
 
 def test_flags_come_in_a_fixed_order():
@@ -474,9 +643,6 @@ def test_the_verifier_rejects_extra_lines_and_a_different_layout():
         "p", "Upstream Source : a\nCurrent Upstream Branch : b\n")
 
 
-ETHTOOL = "https://git.kernel.org/pub/scm/network/ethtool/ethtool.git"
-
-
 def _tag_row(tag="v6.1", contains="yes", **cells):
     """A tag-only row as the release CSV writes it, evidence columns included."""
     return _row(**{"Upstream Repository": ETHTOOL, "Upstream Branch": "",
@@ -504,6 +670,47 @@ def _tag_row(tag="v6.1", contains="yes", **cells):
 def test_the_verifier_agrees_with_the_mapping_row(resolution, row):
     value = parse_fields(SERVICE.render(resolution))
     assert VERIFY.field_problems(resolution.package, row, value) == []
+
+
+def _as_json(resolution):
+    """The candidates as upstream-resolutions.json stores them."""
+    return [c.model_dump(mode="json") for c in resolution.candidates]
+
+
+@pytest.mark.parametrize("resolution,row", [
+    (_probed(), _tag_row()),
+    (VARIANTS["branch from the probe, tag not in the fork"],
+     _tag_row("release_2_0_0", "no")),
+    (_probed(79, 79, "libnl3_7_0", "main"), _tag_row("libnl3_7_0")),
+    (_netfilterqueue(), _tag_row("v1.1.0", **{
+        "Upstream Repository": "https://github.com/oremanj/python-netfilterqueue.git"})),
+    # Measured, but not qualifying: the N/A form is still what is required.
+    (_probed(20, 21), _tag_row()),
+])
+def test_the_verifier_re_derives_a_branch_from_the_probe(resolution, row):
+    value = parse_fields(SERVICE.render(resolution))
+    assert VERIFY.field_problems(resolution.package, row, value,
+                                 _as_json(resolution)) == []
+
+
+def test_the_verifier_rejects_a_derived_branch_it_cannot_re_derive():
+    value = parse_fields(SERVICE.render(_probed()))
+    # No measurements: the CSV alone supports only the N/A form.
+    assert VERIFY.field_problems("ethtool", _tag_row(), value)
+    # Measurements that do not qualify.
+    assert VERIFY.field_problems("ethtool", _tag_row(), value,
+                                 _as_json(_probed(20, 21)))
+    # A different branch from the one measured.
+    other = {SOURCE_LABEL: ETHTOOL, BRANCH_LABEL: "main"}
+    assert VERIFY.field_problems("ethtool", _tag_row(), other,
+                                 _as_json(_probed()))
+
+
+def test_the_verifier_rejects_n_a_where_the_probe_supports_the_branch():
+    """The renderer always writes the branch then; N/A means it did not."""
+    value = parse_fields(SERVICE.render(_tag_only()))
+    assert VERIFY.field_problems("ethtool", _tag_row(), value,
+                                 _as_json(_probed()))
 
 
 @pytest.mark.parametrize("value,row", [
@@ -566,3 +773,37 @@ def test_the_verifier_holds_the_plan_to_the_file():
     assert VERIFY.plan_entry_problems(stale, text)
     old_plan = {"package": "ethtool", "upstream_ref": "v6.1"}
     assert "regenerate" in VERIFY.plan_entry_problems(old_plan, text)[0]
+
+
+def test_the_verifier_requires_the_flag_on_a_branch_from_a_tag():
+    text = SERVICE.render(_probed())
+    field = branch_field(_probed())
+    entry = {
+        "package": "ethtool",
+        "upstream_source": source_field(_probed()),
+        "current_upstream_branch": field.value,
+        "upstream_tag": field.tag,
+        "flags": [{"code": f.code, "detail": f.detail}
+                  for f in review_flags(_probed())],
+    }
+    assert VERIFY.plan_entry_problems(entry, text) == []
+    unflagged = dict(entry, flags=[])
+    assert BRANCH_FROM_TAG in VERIFY.plan_entry_problems(unflagged, text)[0]
+    # And never on a plain branch.
+    plain = SERVICE.render(_resolution())
+    stray = {"package": "mstpd", "upstream_source": URL,
+             "current_upstream_branch": "master", "upstream_tag": "",
+             "flags": [{"code": BRANCH_FROM_TAG, "detail": "x"}]}
+    assert BRANCH_FROM_TAG in VERIFY.plan_entry_problems(stray, plain)[0]
+
+
+@pytest.mark.parametrize("name,ok", [
+    ("debian-upstream-tracking", True),
+    ("debian-upstream-tracking-trixie", True),
+    ("upstream-metadata/bookworm/mstpd", True),
+    ("debian-upstream-tracking-x", False),
+    ("debian-upstream-tracking-trixie/x", False),
+    ("aminor-trixie", False),
+])
+def test_the_verifier_accepts_the_publishers_branch_names(name, ok):
+    assert VERIFY.metadata_branch(name) is ok

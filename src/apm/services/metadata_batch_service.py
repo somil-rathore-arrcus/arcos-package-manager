@@ -4,7 +4,7 @@ Two things happen here, and they are kept apart on purpose:
 
   generation   renders the file for every package from the SAME verified
                resolution the mapping and the dashboard use, writes it under
-               out/upstream-md/<package>/debian/upstream.md, and says what
+               out/upstream-md-<release>/<package>/debian/upstream.md, and says what
                committing it would do to what is already in the fork.
 
   planning     records the branch, base branch, commit message and diff that a
@@ -22,12 +22,12 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from ..domain.enums import ResolutionStatus, UpstreamMdOutcome
 from ..domain.models import UpstreamResolution
 from .upstream_md_publisher import (
-    BRANCH_TEMPLATE, branch_for, commit_title, sha256_text,
+    BRANCH_TEMPLATE, branch_for, commit_title, sha256_text, template_for,
 )
 from .upstream_md_service import (
     UPSTREAM_MD_PATH, branch_field, review_flags, source_field,
@@ -128,11 +128,17 @@ class MetadataBatchService:
 
     def __init__(self, upstream_md, workspaces=None,
                  branch_template: str = BRANCH_TEMPLATE,
-                 commit_message: str = COMMIT_MESSAGE) -> None:
+                 commit_message: str = COMMIT_MESSAGE,
+                 release_templates: Optional[Dict[str, str]] = None) -> None:
         self.upstream_md = upstream_md
         self.workspaces = workspaces
         self.branch_template = branch_template
+        self.release_templates = dict(release_templates or {})
         self.commit_message = commit_message
+
+    def template(self, release: str) -> str:
+        """The branch template this release's plan uses."""
+        return template_for(release, self.branch_template, self.release_templates)
 
     # -- reading what is already there -------------------------------------
 
@@ -219,7 +225,7 @@ class MetadataBatchService:
                 or resolution.arcos_repository,
                 arcos_branch=resolution.arcos_branch,
                 branch=branch_for(resolution.package, release,
-                                  self.branch_template),
+                                  self.template(release)),
                 commit_message=commit_title(resolution.package, outcome),
                 local_path=str(target),
                 diff=document.diff or "",
@@ -255,7 +261,7 @@ class MetadataBatchService:
             "release": result.release,
             "path": UPSTREAM_MD_PATH,
             "commit_message": self.commit_message,
-            "branch_template": self.branch_template,
+            "branch_template": self.template(result.release),
             "pushed": False,
             "pull_requests_created": False,
             "note": (
@@ -278,7 +284,7 @@ class MetadataBatchService:
             "",
             f"- File: `{UPSTREAM_MD_PATH}`",
             f"- Commit message: `{self.commit_message}`",
-            f"- Branch: `{branch_for('<package>', result.release, self.branch_template)}`",
+            f"- Branch: `{branch_for('<package>', result.release, self.template(result.release))}`",
             "",
             "| Package | ARCoS repository | Base branch | Branch | Outcome | "
             "Upstream Source | Current Upstream Branch | Flags |",

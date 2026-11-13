@@ -110,14 +110,31 @@ def run_doctor(repositories=(), release: str = "bookworm",
                 line.split("!")[0].replace("Hi ", "authenticated as ")
                 if line else "could not confirm (push access is checked at push time)")
 
+    print("== Pushing")
+    if env.allow_push:
+        _report("PASS", "APM_ALLOW_PUSH is set",
+                "this machine pushes branches; no pull request is ever opened")
+    else:
+        _report("WARN", "APM_ALLOW_PUSH is not set",
+                "comparisons and dry runs only: every push is refused here")
+
+    print("== Dashboard API")
+    if env.api_token:
+        _report("PASS", "APM_API_TOKEN is set",
+                "pushes and approvals need it; value not shown")
+    else:
+        _report("WARN", "APM_API_TOKEN is not set",
+                "anyone who can reach the dashboard can push with this server's key")
+
     print("== GitHub API")
     from .services.github_service import GitHubError, GitHubService
 
     github = GitHubService(env.github_token, env.github_api_url,
                            timeout=env.http_timeout)
     if not env.github_token:
-        _report("WARN", "APM_GITHUB_TOKEN is not set",
-                "read-only: dry runs work, pull requests cannot be opened")
+        _report("PASS", "APM_GITHUB_TOKEN is not set",
+                "not needed: pull requests are found from git refs, and this "
+                "application never opens one")
         try:
             response = github._request("GET", "/rate_limit")
             _report("PASS" if response.status_code == 200 else "FAIL",

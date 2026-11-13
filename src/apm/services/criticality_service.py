@@ -34,10 +34,15 @@ ADVISORY = re.compile(
     re.IGNORECASE,
 )
 
-# An explicit security statement, not a guess from vocabulary.
+# An explicit security statement, not a guess from vocabulary. Read in the body
+# only: in a subject, "security:" is the kernel's security/ subsystem prefix.
 SECURITY_TRAILER = re.compile(
     r"^\s*(?:security(?:-fix)?|vulnerability):\s*\S", re.IGNORECASE | re.MULTILINE
 )
+
+# git's own wording for a revert. The subject it quotes, CVE and all, is the
+# reverted commit's: it names what is undone, not what is fixed.
+REVERT = re.compile(r'^\s*Revert\s+"', re.IGNORECASE)
 
 
 class CriticalityService:
@@ -46,21 +51,30 @@ class CriticalityService:
     def assess(self, subject: str, body: str = "") -> CriticalityAssessment:
         text = f"{subject}\n{body}"
         assessment = CriticalityAssessment()
+        reverting = bool(REVERT.match(subject or ""))
 
         cves = _unique(m.group(0).upper() for m in CVE.finditer(text))
-        if cves:
-            assessment.cve_ids = cves
-            assessment.evidence.append(
-                "references " + ", ".join(cves)
-            )
-
         advisories = _unique(m.group(0).upper() for m in ADVISORY.finditer(text))
-        if advisories:
+        if reverting and (cves or advisories):
+            # Never CRITICAL on these alone: "select critical" would then undo
+            # the very fix they name. A person decides.
             assessment.evidence.append(
-                "security advisory " + ", ".join(advisories)
+                "reverts a change that referenced "
+                + ", ".join(cves + advisories)
+                + "; applying it may undo a security fix"
             )
+        else:
+            if cves:
+                assessment.cve_ids = cves
+                assessment.evidence.append(
+                    "references " + ", ".join(cves)
+                )
+            if advisories:
+                assessment.evidence.append(
+                    "security advisory " + ", ".join(advisories)
+                )
 
-        if SECURITY_TRAILER.search(text):
+        if SECURITY_TRAILER.search(body or ""):
             assessment.evidence.append("carries an explicit security trailer")
 
         if CC_STABLE.search(text):

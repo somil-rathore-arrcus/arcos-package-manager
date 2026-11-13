@@ -13,11 +13,14 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from ..domain.enums import ErrorCode
+from ..gitio.workspace import GitWorkspaceError
 from ..services.comparison_service import ComparisonError
 from ..services.github_service import GitHubError
 from ..services.patch_service import PatchError
+from ..services.publish_status import PublishStatusError
 from ..services.upstream_md_publisher import PublishError
 from ..services.upstream_service import UpstreamServiceError
+from .deps import ApiAuthError
 
 log = logging.getLogger(__name__)
 
@@ -37,17 +40,35 @@ STATUS = {
     ErrorCode.INVALID_REF: 404,
     ErrorCode.STALE_SELECTION: 409,
     ErrorCode.BASE_MOVED: 409,
+    ErrorCode.API_TOKEN_REQUIRED: 401,
+    ErrorCode.RATE_LIMITED: 429,
+    ErrorCode.PULL_REQUESTS_DISABLED: 403,
+    ErrorCode.PUSH_DISABLED: 403,
     ErrorCode.INTERNAL: 500,
 }
 
 HANDLED = (
     ComparisonError, PatchError, GitHubError, UpstreamServiceError, PublishError,
+    PublishStatusError, ApiAuthError,
 )
 
 
 def install(app) -> None:
     for exception_type in HANDLED:
         app.add_exception_handler(exception_type, _handle)
+    app.add_exception_handler(GitWorkspaceError, _handle_git)
+
+
+async def _handle_git(request: Request, exc: GitWorkspaceError) -> JSONResponse:
+    """A git command a service did not turn into its own error: git's message,
+    not a bare 500 the dashboard can only call "request failed"."""
+    code = ErrorCode.TIMEOUT if exc.timed_out else ErrorCode.GIT_ERROR
+    log.error("%s on %s: %s", code.value, request.url.path, exc)
+    return JSONResponse(
+        status_code=STATUS[code],
+        content={"code": code.value, "message": f"git failed: {exc}",
+                 "detail": (exc.stderr or "")[:400] or None},
+    )
 
 
 async def _handle(request: Request, exc: Exception) -> JSONResponse:

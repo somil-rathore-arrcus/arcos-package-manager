@@ -99,14 +99,15 @@ flowchart TB
 
     R5 --> FILES[("Generated files<br/>CSV / XLSX / upstream.md")]
 
-    SL -. "disabled — no token configured" .-> GH["GitHub write / PR API"]
+    SL -. "never used — the tool opens no PR" .-> GH["GitHub write / PR API"]
 
     style GH stroke-dasharray: 5 5
 ```
 
-The dashed path is deliberate: no GitHub token is configured in the current
-deployment, so every write path is disabled and the dashboard states this rather
-than failing at the last step.
+The dashed path is deliberate: the application never writes to GitHub's API -
+it opens no pull request, with or without a token. Branches are pushed over SSH,
+and only from Lakshya's machine, the one deployment where `APM_ALLOW_PUSH` is
+set; any other copy of the application is read-only and says so.
 
 ---
 
@@ -210,8 +211,10 @@ Each step is an explicit act; nothing advances on its own.
   choosing a side of a conflict is a product decision.
 - Cherry-picking always creates a **new** branch; a request whose branch name
   equals the target is refused.
-- Push and PR creation are separate, explicit operations requiring a GitHub
-  token. **The current deployment has no token configured and is read-only.**
+- Push is a separate, explicit operation, allowed only on the machine
+  configured for it (`APM_ALLOW_PUSH`); the tool never creates the PR - a
+  person opens it from the pushed branch's link. **Only the deployment on
+  Lakshya's machine pushes; every other copy is read-only.**
 - Commits already present — ARCoS-specific or already backported — cannot be
   selected at all.
 
@@ -247,9 +250,11 @@ overwritten.
 - The application code hard-codes **no** VM hostname, username, SSH key path,
   organisation or GitHub token. All of it is environment configuration, and
   secrets are never committed or logged.
-- The current deployment is **read-only**. Reading private repositories works
-  over SSH without a GitHub token; only the REST API needs one, so the mapping,
-  comparison, reporting and preview workflows all function fully without it.
+- The deployment **never writes to GitHub's API** and opens no pull request.
+  Reading private repositories works over SSH without a GitHub token, so the
+  mapping, comparison, reporting and preview workflows all function fully
+  without one; pushing a branch needs `APM_ALLOW_PUSH`, set only on Lakshya's
+  machine.
 
 ---
 
@@ -411,9 +416,10 @@ SSH host-key handling.
    branch.** The safety property is structural rather than procedural.
 8. **One verified mapping is the source of truth** for the dashboard, the
    reports and `debian/upstream.md`, so they cannot disagree.
-9. **Read-only is the default.** Push and PR creation require an explicitly
-   configured token and an explicit user action, so a misconfiguration cannot
-   escalate into an unintended repository change.
+9. **Read-only is the default.** A push requires a machine explicitly
+   configured for it (`APM_ALLOW_PUSH`) and an explicit user action, and the
+   tool never opens a pull request, so a misconfiguration cannot escalate into
+   an unintended repository change.
 
 ---
 

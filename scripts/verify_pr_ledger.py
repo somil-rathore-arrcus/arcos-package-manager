@@ -4,13 +4,18 @@
     python scripts/verify_pr_ledger.py [release]
 
 Invariants that must hold whatever happened during the run:
-  - every branch the tool created is under upstream-metadata/
+  - every branch the tool created is debian-upstream-tracking or under
+    upstream-metadata/
   - no recorded branch is the branch it targets
   - every PR_OPENED / PR_EXISTS entry has a pushed commit and a PR URL
   - every BRANCH_PUSHED entry (a push-only run) was pushed, names a full
     commit, links to GitHub's compare page for exactly its own repository,
     base and branch, and records no pull request - none was opened
   - every pushed entry names a full commit SHA
+  - every COVERED entry names the release whose branch covers it, that
+    branch's full commit, and pushed nothing and links nothing of its own
+  - no entry records a pull request this tool opened (PR_OPENED): it never
+    opens one
 
 It also reports how many of the plan's packages the ledger accounts for; a
 partial rollout (--limit, --package) is expected to leave some out.
@@ -22,6 +27,16 @@ import json
 import re
 import sys
 from pathlib import Path
+
+
+def metadata_branch(name: str) -> bool:
+    """debian-upstream-tracking, debian-upstream-tracking-<release>, or a name
+    under debian-upstream-tracking/ or upstream-metadata/: the publisher's rule,
+    restated rather than imported."""
+    return name == "debian-upstream-tracking" or bool(
+        re.fullmatch(r"debian-upstream-tracking-[a-z][a-z0-9]{2,}", name)) or any(
+        name.startswith(prefix) and len(name) > len(prefix)
+        for prefix in ("debian-upstream-tracking/", "upstream-metadata/"))
 
 ROOT = Path(__file__).resolve().parents[1]
 failures = []
@@ -42,9 +57,8 @@ def main(release: str) -> int:
     entries = json.loads(ledger_path.read_text())["entries"]
 
     branches = [e for e in entries if e.get("branch")]
-    outside = [e["package"] for e in branches
-               if not e["branch"].startswith("upstream-metadata/")]
-    check("every branch is under upstream-metadata/", not outside,
+    outside = [e["package"] for e in branches if not metadata_branch(e["branch"])]
+    check("every branch is one this workflow creates", not outside,
           ", ".join(outside))
     onto_base = [e["package"] for e in branches
                  if e["branch"] == e.get("base_branch")]
@@ -79,6 +93,19 @@ def main(release: str) -> int:
                and not re.fullmatch(r"[0-9a-f]{40}", e.get("commit") or "")]
     check("every pushed entry names a full commit", not bad_sha,
           ", ".join(bad_sha))
+
+    covered = [e for e in entries if e["status"] == "COVERED"]
+    bad_cover = [
+        e["package"] for e in covered
+        if not e.get("covered_by") or e.get("pushed") or e.get("pr_create_url")
+        or not re.fullmatch(r"[0-9a-f]{40}", e.get("commit") or "")
+        or not metadata_branch(e.get("branch") or "")
+    ]
+    check("every covered package names its covering branch and pushed nothing",
+          not bad_cover, ", ".join(bad_cover))
+    opened_here = [e["package"] for e in entries if e["status"] == "PR_OPENED"]
+    check("no pull request was opened by this tool", not opened_here,
+          ", ".join(opened_here))
 
     packages = [e["package"] for e in entries]
     check("one entry per package", len(packages) == len(set(packages)))

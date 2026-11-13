@@ -101,6 +101,7 @@ td.shrink { width: 1%; white-space: nowrap; }
 .alert.error { background: var(--bad-bg); border-color: #f0b4b0; color: var(--bad-fg); }
 .alert.warn { background: var(--warn-bg); border-color: #e8d49a; color: var(--warn-fg); }
 .alert.info { background: var(--info-bg); border-color: #b9d2f2; color: var(--info-fg); }
+.alert.neutral { background: var(--neutral-bg); border-color: var(--border); color: var(--neutral-fg); }
 .alert h3 { margin: 0 0 4px; font-size: 13px; }
 .alert p { margin: 0; font-size: 13px; }
 

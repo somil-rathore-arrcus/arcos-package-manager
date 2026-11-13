@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..domain.enums import ErrorCode
 
@@ -84,17 +84,6 @@ class ContentBaseApprovalRequest(BaseModel):
     confirm: bool = Field(False, description="Must be true.")
 
 
-class PullRequestRequest(BaseModel):
-    package: str
-    release: str
-    arcos_branch: str
-    head_branch: str
-    title: Optional[str] = None
-    body: Optional[str] = None
-    draft: bool = False
-    applied: List[str] = Field(default_factory=list)
-
-
 class UpstreamMdRequest(BaseModel):
     package: str
     release: str
@@ -105,34 +94,37 @@ class UpstreamMdRequest(BaseModel):
 
 
 class UpstreamMdPrRequest(BaseModel):
+    """Push one package's reviewed debian/upstream.md to its branch.
+
+    Only the package and release are the caller's: the repository, the target
+    branch and the content come from the reviewed plan, and the branch name
+    from settings.yaml and the publishing records. A request naming a branch
+    or a target is refused (422), never followed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     package: str
     release: str
-    arcos_branch: Optional[str] = None
-    branch_name: Optional[str] = Field(
-        None,
-        description="Must be under upstream-metadata/ and not the target branch.",
-    )
-    draft: bool = False
     dry_run: bool = Field(
         False,
         description=(
-            "Build and check the exact commit, then stop: nothing is pushed and "
-            "no pull request is opened."
+            "Build and check the exact commit, then stop: nothing is pushed."
         ),
     )
     confirm: bool = Field(
         False,
         description=(
-            "Must be true. Opening a pull request is an explicit act, never a "
+            "Must be true unless dry_run. Pushing is an explicit act, never a "
             "side effect of generating the file."
         ),
     )
     push_only: bool = Field(
-        False,
+        True,
         description=(
-            "Push the branch but open no pull request: the result is "
-            "BRANCH_PUSHED with pr_create_url, GitHub's page to open it from. "
-            "Needs no GitHub token; still needs confirm=true unless dry_run."
+            "Always true: the branch is pushed and the result carries its "
+            "Compare Link (compare_url) and pr_create_url; a person opens the "
+            "pull request. false is refused - this application never opens one."
         ),
     )
 

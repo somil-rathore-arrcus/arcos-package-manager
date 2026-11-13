@@ -10,13 +10,14 @@ The evidence behind the two values - verification level, ref selection,
 merge base, counts, backlog - goes into the pull request body. A reviewer reads
 it once; the package does not carry it forever. The plan carries less: each
 package's status, reason and [review flags](#review-flags) beside the two
-values. To read the full body before anything is pushed, run a `--push-only`
-dry run: its links file has each package's description
+values. To read the full body before anything is pushed, run a
+`publish-upstream-md` dry run: its links file has each package's description
 ([upstream-md-publishing.md](upstream-md-publishing.md#the-links-file)).
 
 Generating writes files **locally** under `out/`. It pushes nothing, creates no
-branch, opens no pull request and needs no GitHub token. Proposing the files is
-a separate step: [upstream-md-publishing.md](upstream-md-publishing.md).
+branch, opens no pull request and needs no GitHub token. Pushing the files is
+a separate step, and opening the pull requests is a person's:
+[upstream-md-publishing.md](upstream-md-publishing.md).
 
 ## What the file contains
 
@@ -34,17 +35,31 @@ paragraph. The file ends with exactly one newline and has no trailing
 whitespace or carriage return, so it passes `git diff --check`. Generation is
 deterministic: the same mapping always gives the same bytes.
 
-A package whose mapping records a tag but no branch, `iproute2`:
+A package whose mapping records a tag but no branch, `ethtool`, where the
+ancestry probe also measured the upstream default branch against the same ARCoS
+commit:
 
 ```text
-Upstream Source: https://git.kernel.org/pub/scm/network/iproute2/iproute2.git
+Upstream Source: https://git.kernel.org/pub/scm/network/ethtool/ethtool.git
 
-Current Upstream Branch: N/A - no upstream branch verified; upstream tag v6.1.0
+Current Upstream Branch: master
 ```
 
-A tag is a fixed point, not something a fork can track. The file names the
-tag and says that no branch was verified. It never writes the tag as if it were
-a branch, and it never guesses which branch the tag came from.
+A tag is a fixed point, not something a fork can track, so it is never written
+as if it were a branch. The probe measures the repository's default branch (and
+the branch `config/overrides.yaml` names, if any) with the same ARCoS commit as
+the tag. When that branch shares history with the fork
+and the fork has no more commits outside it than outside the tag (ethtool: 14
+outside `master`, 116 outside `v6.1`), the branch holds the fork's base: the
+file names it, and the `BRANCH_FROM_TAG` review flag says it was derived from a
+tag and gives both counts. A fork taken from a side branch has commits the
+default branch lacks, so it does not qualify. If two branches qualify, the one
+with fewer commits outside it wins, then the one `overrides.yaml` names. Without
+that measurement the file names the tag and says no branch was verified:
+
+```text
+Current Upstream Branch: N/A - no upstream branch verified; upstream tag v6.1.0
+```
 
 Values are never guessed. Every value that was not established is written as
 fixed text starting with `N/A`, so the plan, the verifier and a reader can tell
@@ -69,7 +84,8 @@ The first row that applies:
 |---|---|---|
 | A status other than `VERIFIED` | `N/A - not verified (status <STATUS>)` | no |
 | An upstream branch | The branch, e.g. `master`, `main`, `linux-6.1.y` | yes |
-| An upstream tag and no branch | `N/A - no upstream branch verified; upstream tag <tag>` | no |
+| An upstream tag and no branch, and the probe measured the upstream default branch, or the branch `overrides.yaml` names, against the same ARCoS commit as sharing history, with no more ARCoS commits outside it than outside the tag | That branch, e.g. `master` (flagged `BRANCH_FROM_TAG`) | yes |
+| An upstream tag and no branch, otherwise | `N/A - no upstream branch verified; upstream tag <tag>` | no |
 | ... and the ARCoS fork does not contain that tag | The same, followed by ` (the ARCoS fork does not contain this tag)` | no |
 | Only a ref selection whose `ls-remote` kind is a branch (an older mapping) | That ref | yes |
 | A ref, but not whether it is a branch or a tag (an older mapping) | `N/A - no upstream branch verified; ref <ref> is not recorded as a branch or a tag` | no |
@@ -95,8 +111,8 @@ Flags appear in:
   one line of codes per package;
 - the plan: `flags` in the JSON, the **Flags** column and the
   **Flagged for review** section (each code with its detail) in the Markdown;
-- the output of a `publish-upstream-md` dry run (and of a push-only apply),
-  as `review: <CODE> - <detail>` under each package;
+- the output of a `publish-upstream-md` dry run (and of an apply), as
+  `review: <CODE> - <detail>` under each package;
 - the pull request body, under `Review notes :`.
 
 Always in this order:
@@ -104,13 +120,15 @@ Always in this order:
 | Code | Raised when | Detail |
 |---|---|---|
 | `BRANCH_NOT_VERIFIED` | The branch field is an `N/A` value | Why: the mapping has only a tag, a ref of unrecorded kind, no ref, or is not `VERIFIED` |
-| `TAG_ONLY` | The mapping records a tag and no branch | The tag, then the ref selection's reason |
+| `TAG_ONLY` | The mapping records a tag and no branch, and the file says N/A | The tag, then the ref selection's reason |
+| `BRANCH_FROM_TAG` | The mapping records a tag and no branch, and the file names the default branch the probe measured (in `TAG_ONLY`'s place) | The tag, the branch, both commit counts, then the ref selection's reason |
 | `BASE_TAG_NOT_IN_FORK` | The ARCoS fork does not contain the upstream tag for Debian's version | The base tag and Debian's upstream version |
 | `FALLBACK_REF` | The ref was chosen as a fallback, not as the release's own ref | The ref selection's reason |
 | `MAPPING_WARNINGS` | The mapping carries plausibility warnings | The warnings, separated by `; ` |
 
 `BRANCH_NOT_VERIFIED` is raised exactly when the branch field starts with
-`N/A`. The verifier checks this.
+`N/A`, and `BRANCH_FROM_TAG` exactly when the plan records a tag and the field
+names a branch. The verifier checks both.
 
 ## Generate for a release
 
@@ -135,7 +153,7 @@ pull request body, which is built when publishing.
 
 | File | Contents |
 |---|---|
-| `out/upstream-md/<package>/debian/upstream.md` | The file, exactly as it would be committed |
+| `out/upstream-md-<release>/<package>/debian/upstream.md` | The file, exactly as it would be committed. One folder per release, so regenerating one release never replaces the files another release's plan was reviewed on |
 | `out/upstream-md-plan-<release>.json` | The plan: one entry per package (keys below), plus the skipped packages and why. `"pushed": false`, `"pull_requests_created": false` |
 | `out/upstream-md-plan-<release>.md` | The same plan as a table - Package, ARCoS repository, Base branch, Branch, Outcome, Upstream Source, Current Upstream Branch, Flags (codes) - then **Flagged for review** (each flagged package with each code and detail, or `No package is flagged.`), then the packages not generated |
 
@@ -144,7 +162,7 @@ Each plan entry:
 | Key | Holds |
 |---|---|
 | `package`, `release`, `status` | The package and its resolution status |
-| `arcos_repository`, `base_branch`, `branch` | Where the change goes: `Arrcus/mstpd`, `aminor`, `upstream-metadata/bookworm/mstpd` |
+| `arcos_repository`, `base_branch`, `branch` | Where the change goes: `Arrcus/mstpd`, `aminor`, and the branch `settings.yaml` names (`debian-upstream-tracking`; trixie `debian-upstream-tracking-trixie`). A package that already has a pushed branch keeps that one when published ([branch name](upstream-md-publishing.md#branch-name)) |
 | `commit_message`, `outcome`, `diff` | The commit title, `CREATED` / `UPDATED` / `NO_CHANGE` / `CONFLICT`, and the diff against the fork |
 | `upstream_source`, `current_upstream_branch` | The two values exactly as the file writes them |
 | `upstream_branch` | The verified branch, or `""` |
@@ -215,16 +233,22 @@ it is a person's decision.
 ## Review checklist
 
 Open `out/upstream-md-plan-<release>.md` and, per package,
-`out/upstream-md/<package>/debian/upstream.md`:
+`out/upstream-md-<release>/<package>/debian/upstream.md`:
 
 - ARCoS repository and base branch are the package's fork and release branch
-  (`Arrcus/mstpd`, `aminor`); the branch is `upstream-metadata/<release>/<package>`.
+  (`Arrcus/mstpd`, `aminor`); the branch is `debian-upstream-tracking`
+  (trixie: `debian-upstream-tracking-trixie`). What is pushed - repository,
+  target and bytes - is exactly what this plan says, from the CLI and the
+  dashboard alike.
 - The file is the two lines and nothing else.
 - `Upstream Source` is the project you expect.
 - `Current Upstream Branch` is the branch you expect the fork to follow
   (`master`, `main`, a maintenance branch such as `linux-6.1.y`), or an `N/A`
   value you accept as the honest answer.
 - Every package under **Flagged for review** has been looked at:
+  - `BRANCH_FROM_TAG`: the mapping selected a tag and the file names the
+    default branch the probe measured as holding the fork's base. Check the
+    counts in the detail and that the fork does follow that branch.
   - `TAG_ONLY` with `BRANCH_NOT_VERIFIED`: the file names the tag and claims
     no branch. Accept that, or establish the branch in the mapping
     ([upstream-resolution.md](upstream-resolution.md)) and regenerate. Never
@@ -251,18 +275,19 @@ docker compose exec app python scripts/verify_upstream_md.py bookworm
 
 `scripts/verify_upstream_md.py` is standalone - it does not import the tool, so
 a bug in the renderer cannot also be a bug in the check. It reads
-`out/upstream-mapping-<release>.csv`, the files and the plan:
+`out/upstream-mapping-<release>.csv`, the files in `out/upstream-md-<release>/`
+and the plan:
 
 | Check | Passes when |
 |---|---|
 | every generated file has a mapping row | |
 | no file was generated for a NO_UPSTREAM package | |
 | every file has exactly the two fields and nothing else | Each file parses as the two fields and is laid out byte for byte as generated: one blank line between them, one trailing newline |
-| every field matches the mapping row | `Upstream Source` is the row's `Upstream Repository` (`N/A` if empty). If the row has an `Upstream Branch`, the branch field is that branch. Else if it has an `Upstream Tag`, the branch field is exactly `N/A - no upstream branch verified; upstream tag <tag>`, followed by ` (the ARCoS fork does not contain this tag)` exactly when the row's `ARCoS Contains Base Tag` is `no` and its `Upstream Base Tag` is that tag (a CSV without those two columns accepts either form). Else it is exactly `N/A - no upstream branch verified`, or `N/A - no upstream branch verified; ref <ref> is not recorded as a branch or a tag`. Every comparison is of the whole value, so a longer tag, an added branch or a guess after `N/A` fails. For a row that is not `VERIFIED`, both fields are `N/A - not verified (status <STATUS>)` |
+| every field matches the mapping row | `Upstream Source` is the row's `Upstream Repository` (`N/A` if empty). If the row has an `Upstream Branch`, the branch field is that branch. Else if it has an `Upstream Tag` and the row's probe measurements in `out/upstream-resolutions.json` qualify a branch (restated from the renderer: the upstream default branch or the branch `overrides.yaml` names, same repository, shares history, no more ARCoS commits outside it than outside the tag; fewest outside wins, then the named branch), the branch field is exactly that branch. Else if it has an `Upstream Tag`, the branch field is exactly `N/A - no upstream branch verified; upstream tag <tag>`, followed by ` (the ARCoS fork does not contain this tag)` exactly when the row's `ARCoS Contains Base Tag` is `no` and its `Upstream Base Tag` is that tag (a CSV without those two columns accepts either form). Else it is exactly `N/A - no upstream branch verified`, or `N/A - no upstream branch verified; ref <ref> is not recorded as a branch or a tag`. Every comparison is of the whole value, so a longer tag, an added branch or a guess after `N/A` fails. For a row that is not `VERIFIED`, both fields are `N/A - not verified (status <STATUS>)` |
 | the plan pushed nothing / the plan created no pull request | `"pushed": false`, `"pull_requests_created": false` |
 | the plan covers exactly the generated files | |
 | no planned branch is the branch it targets | |
-| every planned branch is under upstream-metadata/ | |
+| every planned branch is one this workflow creates | `debian-upstream-tracking`, `debian-upstream-tracking-<release>`, or under `debian-upstream-tracking/` or `upstream-metadata/` |
 | the plan records each file's values and flags every unverified branch | `upstream_source` and `current_upstream_branch` equal the file's values, and `BRANCH_NOT_VERIFIED` is in `flags` exactly when the branch field starts with `N/A` |
 | every generated file still matches the plan's hash | |
 
@@ -282,6 +307,7 @@ curl -s -X POST http://<server-ip>:8080/api/upstream-md/generate \
 ```
 
 Returns the content (the two-field file), the outcome and the diff.
-`"write_local": true` also saves it as
-`out/upstream-md/<package>__<release>.md`. A `NO_UPSTREAM` package is refused
-(HTTP 400).
+`"write_local": true` also saves it as a draft,
+`out/upstream-md-drafts/<package>__<release>.md` - never a reviewed file:
+publishing reads only what `generate-upstream-md` wrote to
+`out/upstream-md-<release>/`. A `NO_UPSTREAM` package is refused (HTTP 400).

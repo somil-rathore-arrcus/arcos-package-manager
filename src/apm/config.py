@@ -96,11 +96,27 @@ class Settings:
         block = self.raw.get("upstream_md_publish", {}) or {}
         return {
             "branch_template": block.get("branch_template", ""),
+            "release_branch_templates": {
+                str(k): str(v)
+                for k, v in (block.get("release_branch_templates") or {}).items()
+                if v
+            },
             "exclude": {
                 str(k): " ".join(str(v or "excluded in settings.yaml").split())
                 for k, v in (block.get("exclude") or {}).items()
             },
             "defer": list(block.get("defer") or []),
+        }
+
+    @property
+    def patches(self) -> dict:
+        """Validation commands run on a patched tree before it may be pushed."""
+        block = self.raw.get("patches", {}) or {}
+        return {
+            "validation_commands": [
+                str(c) for c in (block.get("validation_commands") or []) if str(c).strip()
+            ],
+            "validation_timeout": int(block.get("validation_timeout_seconds", 900)),
         }
 
     def is_vendor(self, name: str) -> bool:
@@ -119,6 +135,13 @@ class Environment:
     private_repository_patterns: List[str] = field(default_factory=list)
     github_token: str = ""
     github_api_url: str = "https://api.github.com"
+    # Required, when set, on every request that writes: a push, a pull request
+    # or an approval. Unset, the API is as open as the network it listens on.
+    api_token: str = ""
+    # Whether this machine may push. Off unless APM_ALLOW_PUSH says otherwise,
+    # and set only on the machine that holds the ARCoS git access, so a copy
+    # of the application started anywhere else can compare but never push.
+    allow_push: bool = False
     cache_dir: Path = Path("~/.cache/arcos-package-manager")
     workspace_dir: str = ""
     cache_ttl: int = 86400
@@ -140,7 +163,7 @@ class Environment:
         ssh = SshConfig(
             host=env.get("APM_SSH_HOST", ""),
             user=env.get("APM_SSH_USER", ""),
-            port=int(env["APM_SSH_PORT"]) if env.get("APM_SSH_PORT") else None,
+            port=_int(env, "APM_SSH_PORT", None),
             identity_file=env.get("APM_SSH_IDENTITY_FILE", ""),
             proxy_jump=env.get("APM_SSH_PROXY_JUMP", ""),
             password=env.get("APM_SSH_PASSWORD", ""),
@@ -148,7 +171,7 @@ class Environment:
                 "APM_SSH_STRICT_HOST_KEY_CHECKING", "accept-new"
             ),
             known_hosts_file=env.get("APM_SSH_KNOWN_HOSTS", ""),
-            connect_timeout=int(env.get("APM_SSH_CONNECT_TIMEOUT", "30")),
+            connect_timeout=_int(env, "APM_SSH_CONNECT_TIMEOUT", 30),
             extra_options=_split(env.get("APM_SSH_OPTIONS", "")),
         )
 
@@ -159,15 +182,17 @@ class Environment:
                 env.get("APM_PRIVATE_REPOSITORY_PATTERNS", "")
             ),
             github_token=env.get("APM_GITHUB_TOKEN", ""),
+            api_token=env.get("APM_API_TOKEN", ""),
+            allow_push=_flag(env.get("APM_ALLOW_PUSH", "")),
             github_api_url=env.get("APM_GITHUB_API_URL", "https://api.github.com"),
             cache_dir=Path(
                 env.get("APM_CACHE_DIR", "~/.cache/arcos-package-manager")
             ).expanduser(),
             workspace_dir=env.get("APM_WORKSPACE_DIR", ""),
-            cache_ttl=int(env.get("APM_CACHE_TTL", "86400")),
-            http_timeout=int(env.get("APM_HTTP_TIMEOUT", "120")),
-            git_timeout=int(env.get("APM_GIT_TIMEOUT", "60")),
-            git_long_timeout=int(env.get("APM_GIT_LONG_TIMEOUT", "900")),
+            cache_ttl=_int(env, "APM_CACHE_TTL", 86400),
+            http_timeout=_int(env, "APM_HTTP_TIMEOUT", 120),
+            git_timeout=_int(env, "APM_GIT_TIMEOUT", 60),
+            git_long_timeout=_int(env, "APM_GIT_LONG_TIMEOUT", 900),
             committer_name=env.get("APM_COMMITTER_NAME", "ARCoS Package Manager"),
             committer_email=env.get(
                 "APM_COMMITTER_EMAIL", "arcos-package-manager@localhost"
@@ -203,13 +228,32 @@ class Environment:
             "ssh_proxy_jump": self.ssh.proxy_jump or None,
             "ssh_password_set": bool(self.ssh.password),
             "github_token_set": bool(self.github_token),
+            "api_token_set": bool(self.api_token),
+            "allow_push": self.allow_push,
             "git_ssh_identity_set": bool(self.git_ssh_identity_file),
             "cache_dir": str(self.cache_dir),
         }
 
 
+def _flag(raw: str) -> bool:
+    """APM_ALLOW_PUSH=1 (or true/yes/on); anything else, including unset, is off."""
+    return (raw or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _split(raw: str) -> List[str]:
     return [item.strip() for item in (raw or "").split(",") if item.strip()]
+
+
+def _int(env, name: str, default: Optional[int]) -> Optional[int]:
+    """A whole number from the environment, or `default` when unset or empty.
+    A bad value names the variable instead of failing with a bare traceback."""
+    raw = (env.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ValueError(f"{name}={raw!r} is not a whole number") from None
 
 
 def _load_dotenv(path: Path) -> None:
@@ -221,7 +265,12 @@ def _load_dotenv(path: Path) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
+        value = value.strip()
+        # KEY="value" and KEY='value' mean value, as they do to Docker Compose;
+        # kept, the quotes would become part of a token.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        os.environ.setdefault(key.strip(), value)
 
 
 def load_settings(path: Optional[Path] = None) -> Settings:

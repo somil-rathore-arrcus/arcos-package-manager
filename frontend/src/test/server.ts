@@ -10,10 +10,10 @@ export interface Overrides {
   compare?: unknown
   preview?: unknown
   cherryPick?: unknown
-  pullRequest?: unknown
   upstreamMd?: unknown
   /** A value, or a function of the request body (dry run and push differ). */
   upstreamMdPr?: unknown
+  publishStatus?: unknown
   reports?: unknown
 }
 
@@ -21,11 +21,17 @@ export interface Recorded {
   calls: { method: string; path: string; body?: unknown }[]
 }
 
+// Fields the upstream.md endpoint refuses: the reviewed plan alone decides the
+// target and the branch name, and no pull request is ever opened.
+const REMOVED_MD_FIELDS = ['arcos_branch', 'branch_name', 'draft']
+
 /**
  * Stand in for the API at the fetch boundary.
  *
  * Mocking fetch rather than the api module keeps the real client in the test,
- * so URL construction, query strings and error decoding are all exercised.
+ * so URL construction, query strings and error decoding are all exercised. The
+ * server's contract refusals are mirrored, so a request it would refuse fails
+ * here too.
  */
 export function mockApi(overrides: Overrides = {}) {
   const recorded: Recorded = { calls: [] }
@@ -65,13 +71,27 @@ export function mockApi(overrides: Overrides = {}) {
     if (path.startsWith('/patches/cherry-pick')) {
       return pick(overrides.cherryPick, fx.cherryPickResult)
     }
-    if (path.startsWith('/pull-requests')) return pick(overrides.pullRequest, fx.pullRequest)
+    if (path.startsWith('/pull-requests')) {
+      return respond({
+        code: 'PULL_REQUESTS_DISABLED', message: 'This tool never opens pull requests.',
+      }, 403)
+    }
     if (path.startsWith('/upstream-md/generate')) {
       return pick(overrides.upstreamMd, fx.upstreamMd)
     }
     if (path.startsWith('/upstream-md/pr')) {
+      const sent = REMOVED_MD_FIELDS.filter((field) => field in (body ?? {}))
+      if (sent.length || body?.push_only === false) {
+        return respond({
+          code: 'INVALID_REQUEST', message: `refused: ${sent.join(', ') || 'push_only=false'}`,
+        }, 422)
+      }
       const value = overrides.upstreamMdPr
-      return pick(typeof value === 'function' ? value(body) : value, fx.upstreamMdPublish)
+      const fallback = body?.dry_run ? fx.upstreamMdDryRun : fx.upstreamMdPushed
+      return pick(typeof value === 'function' ? value(body) : value, fallback)
+    }
+    if (path.startsWith('/publish-status')) {
+      return pick(overrides.publishStatus, fx.publishStatusNoToken)
     }
     if (path.startsWith('/reports')) return pick(overrides.reports, fx.reports)
     return respond({ code: 'NOT_FOUND', message: `no stub for ${path}` }, 404)

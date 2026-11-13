@@ -46,6 +46,10 @@ class SecurityContext:
     debian_patches: Optional[DebianPatchReport] = None
     # Whether ARCoS reaches a commit; None when it cannot be determined.
     contains: Optional[Callable[[str], Optional[bool]]] = None
+    # Whether the upstream ref reaches a commit; None when it cannot be told. A
+    # long comparison lists only its most recent missing commits, so a fix ARCoS
+    # lacks can be missing without being in `missing`.
+    upstream_contains: Optional[Callable[[str], Optional[bool]]] = None
 
 
 @dataclass
@@ -77,8 +81,16 @@ def _status(fixes: Sequence[str], context: SecurityContext) -> str:
             states.append("present")
         elif context.contains is not None:
             reached = context.contains(fix)
-            states.append("present" if reached else
-                          "not_in_range" if reached is False else "unknown")
+            if reached is None:
+                states.append("unknown")
+            elif reached:
+                states.append("present")
+            elif context.upstream_contains is None:
+                states.append("not_in_range")
+            else:
+                upstream = context.upstream_contains(fix)
+                states.append("missing" if upstream else
+                              "not_in_range" if upstream is False else "unknown")
         else:
             states.append("unknown")
     for state in ("missing", "unknown", "not_in_range", "present"):
@@ -130,6 +142,43 @@ class DebianSecurityProvider:
         return out
 
 
+# A fixing commit's web page: GitHub's /commit/<sha>, GitLab's /-/commit/<sha>
+# and cgit's /commit/?id=<sha>, with the repository before it.
+_COMMIT_URL = re.compile(
+    r"^(?P<repo>\S+?)(?:/-)?/commit/(?:\?id=)?(?P<sha>[0-9a-fA-F]{7,40})(?![0-9a-fA-F])"
+)
+
+
+def _osv_fixes(vuln: dict, repo: str, context: SecurityContext) -> List[str]:
+    """The commits OSV says fix `vuln` in this upstream.
+
+    A range or FIX reference for another repository - a mirror, or mainline
+    under a stable tree - counts only when git shows the upstream ref has that
+    commit. Otherwise it fixes some other project and says nothing here.
+    """
+    candidates = []
+    for affected in vuln.get("affected", []) or []:
+        for rng in affected.get("ranges", []) or []:
+            if rng.get("type") != "GIT":
+                continue
+            same = not repo or _normalise_repo(rng.get("repo", "")) == repo
+            candidates += [(e["fixed"], same) for e in rng.get("events", []) or []
+                           if e.get("fixed")]
+    for ref in vuln.get("references", []) or []:
+        if ref.get("type") != "FIX":
+            continue
+        match = _COMMIT_URL.search(ref.get("url", ""))
+        if match:
+            same = not repo or _normalise_repo(match.group("repo")) == repo
+            candidates.append((match.group("sha"), same))
+    fixes = []
+    for sha, same in candidates:
+        if same or (context.upstream_contains is not None
+                    and context.upstream_contains(sha.lower())):
+            fixes.append(sha)
+    return list(dict.fromkeys(fixes))
+
+
 class OsvSecurityProvider:
     """Vulnerabilities OSV.dev knows affect the upstream base commit."""
 
@@ -137,13 +186,14 @@ class OsvSecurityProvider:
 
     def __init__(self, api_url: str = "https://api.osv.dev/v1",
                  cache_dir: Optional[Path] = None, ttl: int = 86400,
-                 timeout: int = 20, max_vulns: int = 100,
+                 timeout: int = 20, max_vulns: int = 100, max_pages: int = 10,
                  client: Optional[httpx.Client] = None) -> None:
         self.api_url = api_url.rstrip("/")
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.ttl = ttl
         self.timeout = timeout
         self.max_vulns = max_vulns
+        self.max_pages = max_pages
         self._client = client
 
     def _post(self, path: str, body: dict) -> dict:
@@ -173,31 +223,17 @@ class OsvSecurityProvider:
             return out
         repo = _normalise_repo(context.upstream_repository)
         vulns: Dict[str, dict] = {}
+        unread = False
         try:
             for commit in context.base_commits[:3]:
-                payload = self._post("/query", {"commit": commit})
-                for vuln in payload.get("vulns", []) or []:
-                    vulns.setdefault(vuln.get("id", ""), vuln)
+                unread = self._query(commit, vulns) or unread
         except (httpx.HTTPError, ValueError) as exc:
             out.available = False
             out.detail = f"{type(exc).__name__}: {exc}"[:200]
             return out
-        for vuln_id, vuln in list(vulns.items())[: self.max_vulns]:
-            fixes = []
-            for affected in vuln.get("affected", []) or []:
-                for rng in affected.get("ranges", []) or []:
-                    if rng.get("type") != "GIT":
-                        continue
-                    if repo and _normalise_repo(rng.get("repo", "")) != repo:
-                        continue
-                    fixes += [e["fixed"] for e in rng.get("events", [])
-                              if e.get("fixed")]
-            for ref in vuln.get("references", []) or []:
-                if ref.get("type") == "FIX":
-                    match = re.search(r"/commit/([0-9a-f]{7,40})", ref.get("url", ""))
-                    if match:
-                        fixes.append(match.group(1))
-            fixes = list(dict.fromkeys(fixes))
+        listed = list(vulns.items())
+        for vuln_id, vuln in listed[: self.max_vulns]:
+            fixes = _osv_fixes(vuln, repo, context)
             aliases = [a for a in vuln.get("aliases", []) or [] if a != vuln_id]
             out.findings.append(SecurityFinding(
                 identifier=vuln_id, aliases=aliases, sources=["osv"],
@@ -205,8 +241,29 @@ class OsvSecurityProvider:
                 fix_commits=fixes, status=_status(fixes, context),
                 url=f"https://osv.dev/vulnerability/{vuln_id}",
             ))
-        out.detail = f"queried {min(len(context.base_commits), 3)} base commit(s)"
+        notes = [f"queried {min(len(context.base_commits), 3)} base commit(s)"]
+        if len(listed) > self.max_vulns:
+            notes.append(f"showing {self.max_vulns} of {len(listed)} "
+                         f"vulnerabilities")
+        if unread:
+            notes.append(f"OSV had more than the {self.max_pages} page(s) read "
+                         f"per commit; the rest are not shown")
+        out.detail = "; ".join(notes)
         return out
+
+    def _query(self, commit: str, vulns: Dict[str, dict]) -> bool:
+        """OSV's answer for `commit`, page by page, into `vulns`. True when
+        OSV still had more after max_pages - a partial answer must say so."""
+        body = {"commit": commit}
+        for _ in range(self.max_pages):
+            payload = self._post("/query", body)
+            for vuln in payload.get("vulns", []) or []:
+                vulns.setdefault(vuln.get("id", ""), vuln)
+            token = payload.get("next_page_token")
+            if not token:
+                return False
+            body = {"commit": commit, "page_token": token}
+        return True
 
 
 class SecurityService:

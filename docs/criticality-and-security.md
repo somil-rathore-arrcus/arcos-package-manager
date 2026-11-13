@@ -39,9 +39,14 @@ From the Debian source package of the shipped version:
 `config/settings.yaml` → `security.osv`. The tool asks OSV.dev which
 vulnerabilities affect the upstream commits ARCoS is based on (up to three
 merge bases, or the approved content base), and collects the fix commits each
-record names - from `GIT` ranges in the same repository and from `FIX`
-references. A missing commit named as a fix becomes `CRITICAL` (source `osv`).
-Answers are cached for a day.
+record names - from `GIT` ranges and `FIX` references (GitHub, GitLab and cgit
+commit links). A fix named for another repository - a mirror, or mainline
+under a stable tree - counts only when git shows the upstream ref has that
+commit. Every page of OSV's answer is read (up to ten per commit); a partial
+answer, or one cut at 100 vulnerabilities, says so in the source line. A
+missing commit named as a fix becomes `CRITICAL` (source `osv`), and a fix
+ARCoS lacks that is on the upstream ref is `missing` even when a long
+comparison does not list it. Answers are cached for a day.
 
 ### Finding status
 

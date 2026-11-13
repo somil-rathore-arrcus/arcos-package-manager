@@ -13,6 +13,9 @@
 #   repository / ref       The upstream to track.
 #   confidence             high | medium. medium reports as NEEDS_REVIEW, which
 #                          is right when the branch was inferred rather than known.
+#   pin_ref                true: probe only `ref`, so the release-aware selection
+#                          cannot replace it with a tag or maintenance branch
+#                          derived from Debian's version.
 #   no_upstream            true when there is provably nothing to track.
 #   category               Overrides classification where the default is wrong.
 #   releases:              Per-release values, layered over the package-wide ones.
@@ -44,11 +47,18 @@ packages:
 
   openssl:
     repository: https://github.com/openssl/openssl.git
-    ref: master
+    ref: OpenSSL_1_1_1-stable
+    pin_ref: true
     confidence: high
     reason: >-
       Homepage is openssl-library.org, a project site rather than a forge, so no
-      automatic strategy resolves it.
+      automatic strategy resolves it. Both ARCoS forks (aminor for bookworm,
+      aminor-trixie for trixie) are OpenSSL 1.1.1w, not the 3.x Debian ships:
+      include/openssl/opensslv.h names OpenSSL 1.1.1w (11 Sep 2023) and
+      debian/changelog is 1.1.1w-0+deb11u1. Their merge base with upstream is
+      "Prepare for release of 1.1.1w" on OpenSSL_1_1_1-stable (checked
+      2026-11-06). Pinned, because Debian's version would otherwise select
+      openssl-3.0 or openssl-3.5.
 
   babeltrace:
     debian_source_package: babeltrace
@@ -86,6 +96,16 @@ packages:
     ref: master
     confidence: high
     reason: Debian ships this as source package 'ust'.
+
+  pyrad:
+    repository: https://github.com/pyradius/pyrad.git
+    ref: master
+    confidence: high
+    reason: >-
+      Debian's metadata names https://github.com/wichert/pyrad, which GitHub now
+      redirects to pyradius/pyrad: the same repository under its new owner
+      (checked 2026-11-10). Recorded so debian/upstream.md names the canonical
+      URL rather than relying on the redirect.
 
   python-netfilterqueue:
     repository: https://github.com/oremanj/python-netfilterqueue.git
@@ -161,16 +181,25 @@ packages:
   zenoh:
     debian_source_package: null
     repository: https://github.com/eclipse-zenoh/zenoh.git
-    ref: main
+    ref: release/1.4.0
+    pin_ref: true
     confidence: high
-    reason: Not in Debian. Eclipse zenoh.
+    reason: >-
+      Not in Debian. Eclipse zenoh. The ARCoS fork's merge base with upstream is
+      exactly the tip of release/1.4.0 (b70ee93, May 2025), which is not on
+      main's first-parent line - release/1.4.0 was merged back into main later
+      (checked 2026-11-06).
 
   zenoh-c:
     debian_source_package: null
     repository: https://github.com/eclipse-zenoh/zenoh-c.git
-    ref: main
+    ref: release/1.4.0
+    pin_ref: true
     confidence: high
-    reason: Not in Debian. C binding for Eclipse zenoh.
+    reason: >-
+      Not in Debian. C binding for Eclipse zenoh. The ARCoS fork's merge base
+      with upstream is exactly the tip of release/1.4.0 (0d33f53, May 2025), not
+      on main's first-parent line (checked 2026-11-06).
 
   libyang1:
     debian_source_package: null
@@ -199,6 +228,22 @@ packages:
     reason: >-
       Same upstream as ONL-standalone; ARCoS keeps a second fork on branch
       aminor-xc for the XC platform.
+
+  # --- A release whose fork is not the series Debian ships ------------------
+
+  linux:
+    releases:
+      trixie:
+        repository: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+        ref: linux-6.1.y
+        pin_ref: true
+        confidence: high
+        reason: >-
+          The trixie manifest pins a 6.1 kernel, not Debian trixie's 6.12: the
+          pinned commit's Makefile is 6.1.55 and its merge base with upstream is
+          v6.1.55 on linux-6.1.y, while its merge base with linux-6.12.y is v6.1
+          (checked 2026-11-06). Bookworm keeps the series derived from Debian's
+          version, which is also linux-6.1.y.
 
   # --- Looked for, provably nothing to track --------------------------------
 

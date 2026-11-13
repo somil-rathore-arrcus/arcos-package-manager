@@ -10,7 +10,7 @@ import { UpstreamMdPanel } from '../components/UpstreamMdPanel'
 import { Loading } from '../components/ui'
 import { useAsyncAction, useAsyncData } from '../hooks/useApi'
 import { api } from '../services/api'
-import type { CherryPickResult, PublishResult, PullRequest } from '../types/api'
+import type { CherryPickResult } from '../types/api'
 
 export function DashboardPage() {
   const [selection, setSelection] = useState<SelectionState>({
@@ -19,12 +19,12 @@ export function DashboardPage() {
   })
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [cherryPick, setCherryPick] = useState<CherryPickResult | null>(null)
-  const [patchPr, setPatchPr] = useState<PullRequest | null>(null)
-  const [mdPr, setMdPr] = useState<PullRequest | null>(null)
-  const [mdPushed, setMdPushed] = useState<PublishResult | null>(null)
 
   const health = useAsyncData(() => api.health(), [])
-  const canCreatePr = !!health.data?.capabilities?.create_pull_requests
+  // The tool never opens a pull request, whatever create_pull_requests says.
+  // Pushing is offered only where the deployment says it is allowed; until
+  // health answers, it is not.
+  const pushEnabled = health.data?.capabilities?.push_enabled === true
   const releases = useAsyncData(() => api.releases(), [])
   const reports = useAsyncData(() => api.reports(), [])
 
@@ -102,9 +102,11 @@ export function DashboardPage() {
   const apply = useAsyncAction(async () => {
     if (!patchRequest || !preview.data?.base_sha) return null
     // Applied only onto the exact tip the preview ran on; the server refuses
-    // if the target branch has moved since.
+    // if the target branch has moved since. The commits are the ones that
+    // were previewed, whatever is ticked now.
     const result = await api.cherryPick({
-      ...patchRequest, push: true, expected_base_sha: preview.data.base_sha,
+      ...patchRequest, shas: preview.data.order, push: true,
+      expected_base_sha: preview.data.base_sha,
     })
     setCherryPick(result)
     return result
@@ -118,17 +120,6 @@ export function DashboardPage() {
     return tag
   })
 
-  const createPr = useAsyncAction(async () => {
-    if (!cherryPick) return null
-    const pr = await api.createPullRequest({
-      package: selection.pkg, release: selection.release,
-      arcos_branch: selection.branch.trim(), head_branch: cherryPick.new_branch,
-      applied: cherryPick.applied,
-    })
-    setPatchPr(pr)
-    return pr
-  })
-
   const upstreamMd = useAsyncAction(async () =>
     api.generateUpstreamMd({
       package: selection.pkg, release: selection.release,
@@ -136,41 +127,27 @@ export function DashboardPage() {
     }),
   )
 
-  const createMdPr = useAsyncAction(async () => {
-    const result = await api.createUpstreamMdPr({
-      package: selection.pkg, release: selection.release,
-      arcos_branch: selection.branch.trim() || undefined, confirm: true,
-    })
-    if (!result.pull_request) {
-      throw new Error(`${result.status}${result.error ? `: ${result.error}` : ''}`)
-    }
-    setMdPr(result.pull_request)
-    return result.pull_request
-  })
-
-  // Every read and check of a real push, then stop. Without a token it is the
-  // push-only dry run, so it shows the link the push would give.
+  // Publishing follows the reviewed plan alone: the server picks the target
+  // and the branch name, so neither is sent - not even the branch chosen
+  // under Selection, which steers the comparison only. Every read and check
+  // of a real push, then stop; it shows where the push would go.
   const mdDryRun = useAsyncAction(async () =>
-    api.createUpstreamMdPr({
+    api.publishUpstreamMd({
       package: selection.pkg, release: selection.release,
-      arcos_branch: selection.branch.trim() || undefined,
-      dry_run: true, push_only: !canCreatePr,
+      dry_run: true, push_only: true,
     }),
   )
 
-  // Without a token: push the branch over SSH and hand back the link a person
-  // opens the pull request from. Offered only after a clean dry run.
+  // Push the branch and hand back the links a person opens the pull request
+  // from. Offered only after a clean dry run. COVERED, or a pull request the
+  // server found, is an answer to show; any other refusal is an error.
   const pushMdBranch = useAsyncAction(async () => {
-    const result = await api.createUpstreamMdPr({
+    const result = await api.publishUpstreamMd({
       package: selection.pkg, release: selection.release,
-      arcos_branch: selection.branch.trim() || undefined,
       confirm: true, push_only: true,
     })
-    if (result.pull_request) {
-      setMdPr(result.pull_request)
-    } else if (result.status === 'BRANCH_PUSHED' && result.pr_create_url) {
-      setMdPushed(result)
-    } else {
+    const settled = result.status === 'BRANCH_PUSHED' || result.status === 'COVERED'
+    if (!settled && !result.pull_request) {
       throw new Error(`${result.status}${result.error ? `: ${result.error}` : ''}`)
     }
     return result
@@ -178,15 +155,11 @@ export function DashboardPage() {
 
   const resetDownstream = () => {
     resolution.reset(); comparison.reset(); preview.reset(); apply.reset()
-    upstreamMd.reset(); createPr.reset(); createMdPr.reset()
-    mdDryRun.reset(); pushMdBranch.reset()
-    setSelected(new Set()); setCherryPick(null); setPatchPr(null); setMdPr(null)
-    setMdPushed(null)
+    upstreamMd.reset(); mdDryRun.reset(); pushMdBranch.reset()
+    setSelected(new Set()); setCherryPick(null)
   }
 
-  const mapping = health.data?.capabilities?.mapping as
-    { rows?: number; generated_at?: string | null } | undefined
-  const mappingRows = mapping?.rows ?? null
+  const mappingRows = health.data?.capabilities?.mapping?.rows ?? null
 
   return (
     <>
@@ -200,14 +173,20 @@ export function DashboardPage() {
               {mappingRows != null && <> · mapping: {mappingRows} rows</>}
             </span>
           )}
-          {health.data && !canCreatePr && (
+          <span
+            className="badge tone-neutral"
+            title={'Patch and debian/upstream.md branches are pushed; the tool never '
+              + 'opens, submits or merges a pull request.'}
+          >
+            Never opens pull requests — a person opens each one from its Compare Link
+          </span>
+          {health.data && !pushEnabled && (
             <span
-              className="badge tone-neutral"
-              title={'No GitHub token is configured. Patch branches cannot be pushed; '
-                + 'a debian/upstream.md branch can be pushed over SSH and its pull '
-                + 'request opened from a GitHub link.'}
+              className="badge tone-warn"
+              title={'The server refuses every push here (PUSH_DISABLED). Previews and '
+                + 'dry runs still work.'}
             >
-              Read-only mode — no GitHub token; the tool opens no pull requests
+              Pushing is disabled on this deployment
             </span>
           )}
           <DownloadMappingReport reports={reports.data ?? []} />
@@ -273,7 +252,12 @@ export function DashboardPage() {
           <CommitTable
             comparison={comparison.data}
             selected={selected}
-            onSelectedChange={setSelected}
+            onSelectedChange={(next) => {
+              setSelected(next)
+              // A preview describes the selection it ran on. Until something
+              // is pushed, another selection needs a preview of its own.
+              if (!cherryPick) { preview.reset(); apply.reset() }
+            }}
             onPreview={() => preview.run()}
             previewing={preview.loading}
           />
@@ -281,46 +265,37 @@ export function DashboardPage() {
 
         <ErrorAlert error={preview.error} />
         <ErrorAlert error={apply.error} />
-        <ErrorAlert error={createPr.error} />
 
         {preview.data && (
           <PreviewPanel
             preview={preview.data}
             result={cherryPick}
-            pullRequest={patchPr}
-            onCancel={() => { preview.reset(); apply.reset(); setCherryPick(null); setPatchPr(null) }}
+            onCancel={() => { preview.reset(); apply.reset(); setCherryPick(null) }}
             onApply={() => apply.run()}
             applying={apply.loading}
-            onCreatePr={() => createPr.run()}
-            creatingPr={createPr.loading}
-            canCreatePr={canCreatePr}
-            readOnly={!canCreatePr}
+            pushEnabled={pushEnabled}
           />
         )}
 
         {resolution.data && resolution.data.status !== 'NO_UPSTREAM' && (
           <>
             <ErrorAlert error={upstreamMd.error} />
-            <ErrorAlert error={createMdPr.error} />
             <ErrorAlert error={mdDryRun.error} />
             <ErrorAlert error={pushMdBranch.error} />
             <UpstreamMdPanel
               document={upstreamMd.data}
-              pullRequest={mdPr}
               onGenerate={() => {
-                mdDryRun.reset(); pushMdBranch.reset(); setMdPushed(null)
+                mdDryRun.reset(); pushMdBranch.reset()
                 upstreamMd.run()
               }}
               generating={upstreamMd.loading}
-              onCreatePr={() => createMdPr.run()}
-              creatingPr={createMdPr.loading}
-              canCreatePr={canCreatePr}
               dryRun={mdDryRun.data}
               onDryRun={() => mdDryRun.run()}
               dryRunning={mdDryRun.loading}
-              pushed={mdPushed}
+              pushed={pushMdBranch.data}
               onPush={() => pushMdBranch.run()}
               pushing={pushMdBranch.loading}
+              pushEnabled={pushEnabled}
             />
           </>
         )}

@@ -3,7 +3,8 @@
 For every ARCoS package it finds the real upstream project, proves the
 relationship with git history, shows which upstream fixes the ARCoS fork is
 missing, and records the verified answer in the package repository as
-`debian/upstream.md` - through pull requests that a person reviews and merges.
+`debian/upstream.md` - on a pushed branch from which a person opens the pull
+request. The tool never creates, opens, submits or merges a pull request.
 
 FastAPI + React dashboard and a command-line tool (`apm`), with git and the
 Debian archive underneath. No database. Runs as one Docker container.
@@ -18,7 +19,7 @@ Debian archive underneath. No database. Runs as one Docker container.
 | Assess | Criticality from evidence only (CVE, advisory, Debian security patch, OSV.dev) | `CRITICAL`, `STABLE_RELEVANT`, `NORMAL`, `UNKNOWN` |
 | Preview | Tries selected upstream patches in a throwaway workspace | Clean or conflict report; nothing written |
 | Record | Renders `debian/upstream.md` - `Upstream Source` and `Current Upstream Branch`, nothing else - from the verified mapping | Files + a branch/commit plan with review flags |
-| Publish | Dry run, then one branch and one PR per eligible package - or, without a token, the branch and a link to open the PR | PRs against the ARCoS package repositories + a results ledger |
+| Publish | Dry run, then one pushed branch per eligible package, with its Compare Link and a pre-filled link to open the PR; a person opens it | Branches on the ARCoS package repositories + a results ledger + a Bookworm/Trixie publishing report |
 
 ## Quick start (Docker)
 
@@ -30,6 +31,7 @@ git clone https://github.com/somil-rathore-arrcus/arcos-package-manager.git
 cd arcos-package-manager
 cp .env.example .env
 # edit .env: APM_UID/APM_GID (id -u / id -g) and APM_GIT_SSH_KEY_FILE (host path of the key)
+# only on the one machine that pushes (Lakshya's): APM_ALLOW_PUSH=1
 docker compose up -d --build
 docker compose ps                                          # STATUS: healthy
 docker compose exec app apm doctor --repo Arrcus/mstpd     # storage, git and GitHub checks
@@ -37,10 +39,13 @@ docker compose exec app apm doctor --repo Arrcus/mstpd     # storage, git and Gi
 
 Open `http://<server-ip>:8080/`.
 
-Without `APM_GITHUB_TOKEN` the application is **read-only**: everything works -
-mapping, comparison, `upstream.md` generation, dry runs - except opening pull
-requests. `publish-upstream-md --apply --push-only` still pushes the branches
-with the SSH key and prints a link for a person to open each PR. See
+Without `APM_ALLOW_PUSH` the application is **read-only**: everything works -
+mapping, comparison, `upstream.md` generation, previews, dry runs - except
+pushing, which is refused with `PUSH_DISABLED`. It is set (`APM_ALLOW_PUSH=1`)
+only in the `.env` of the deployment on Lakshya's machine. There,
+`publish-upstream-md --apply` pushes the branches with the SSH key and prints
+the links a person opens each PR from. `APM_GITHUB_TOKEN` is optional and only
+read: it finds a pull request a person opened, and its CI checks. See
 [docs/authentication.md](docs/authentication.md).
 
 ## Everyday commands
@@ -57,8 +62,9 @@ Run from the checkout directory on the server.
 | Any CLI command | `docker compose exec app apm <command>` |
 | Refresh the Bookworm mapping | `docker compose exec app apm resolve-release --release bookworm` |
 | Generate `debian/upstream.md` | `docker compose exec app apm generate-upstream-md --release bookworm --branch aminor` |
-| Dry-run one PR | `docker compose exec app apm publish-upstream-md --release bookworm --package mstpd` |
-| Push one branch, no token (PR opened from the link) | `docker compose exec app apm publish-upstream-md --release bookworm --package mstpd --apply --push-only --confirm mstpd` |
+| Dry-run one package | `docker compose exec app apm publish-upstream-md --release bookworm --package mstpd` |
+| Push one branch (a person opens the PR from its link) | `docker compose exec app apm publish-upstream-md --release bookworm --package mstpd --apply --confirm mstpd` |
+| Rebuild the Bookworm/Trixie publishing report | `docker compose exec app apm upstream-md-report` (`--verify` also checks every pushed branch) |
 
 ## Safety rules (enforced by the code)
 
@@ -66,15 +72,24 @@ Run from the checkout directory on the server.
   history (or a content match a person approved) makes a package `VERIFIED`.
 - `debian/upstream.md` writes only recorded facts. A branch that was not
   verified is written as `N/A` with the reason - for a tag-only upstream,
-  `N/A - no upstream branch verified; upstream tag <tag>` - never a guess.
+  `N/A - no upstream branch verified; upstream tag <tag>` - never a guess. A
+  tag-only upstream names a branch only when the ancestry probe measured the
+  upstream default branch as holding the fork's base, flagged `BRANCH_FROM_TAG`.
 - Only `VERIFIED` packages are ever proposed. `NEEDS_REVIEW`, `NO_UPSTREAM` and
   `FAILED` never are.
-- PRs go to the **ARCoS package repositories** (e.g. `Arrcus/mstpd`, branch
-  `upstream-metadata/bookworm/mstpd` → `aminor`), never to upstream projects.
-- The target branch is never written to, nothing is force-pushed, nothing is
-  merged by the tool, and each commit changes exactly `debian/upstream.md`.
+- Branches go to the **ARCoS package repositories** (e.g. `Arrcus/mstpd`,
+  branch `upstream-metadata/bookworm/mstpd` → `aminor`), never to upstream
+  projects.
+- The tool never creates, opens, submits or merges a pull request; the GitHub
+  API is only read. A person opens each one from the branch's Compare Link.
+- The target branch is never written to, nothing is force-pushed, and each
+  commit changes exactly `debian/upstream.md`.
 - Publishing is a dry run unless `--apply` is given with a confirmation that
-  names what will be pushed - with or without `--push-only`.
+  names what will be pushed, and pushes only where `APM_ALLOW_PUSH` is set.
+- What is pushed - repository, target branch, branch name and bytes - comes
+  from the reviewed plan and `settings.yaml`, from the CLI and the dashboard
+  alike. A package whose identical file another release's branch already
+  proposes to the same target is `COVERED`: no second branch.
 - A `debian/upstream.md` the tool does not recognise as its own (anything but
   the two fields, or an older version's file) is never overwritten.
 - No secret is stored in the repository or the image, or printed in logs.
@@ -88,18 +103,17 @@ Start with [docs/README.md](docs/README.md). The most-used pages:
 | [Overview](docs/overview.md) | What the tool is and the end-to-end workflow |
 | [Docker deployment](docs/deployment.md) | Installing it on a server |
 | [Operations](docs/operations.md) | Start, stop, update, rebuild, back up |
-| [Authentication](docs/authentication.md) | SSH key vs GitHub token |
+| [Authentication](docs/authentication.md) | SSH key, `APM_ALLOW_PUSH` and the read-only GitHub token |
 | [CLI](docs/cli.md) / [API](docs/api.md) | Every command and endpoint |
-| [Publishing `debian/upstream.md`](docs/upstream-md-publishing.md) | How PRs are proposed safely |
+| [Publishing `debian/upstream.md`](docs/upstream-md-publishing.md) | How branches are pushed safely, and the links PRs are opened from |
 | [Production handoff](docs/production-handoff.md) | Current state, the first `mstpd` PR, and **what happens next** |
 | [Troubleshooting](docs/troubleshooting.md) | Symptoms and fixes |
 
 ## What happens next
 
-The deployment is ready and read-only. The remaining steps - deploy this
-version, regenerate the two-field files and review the flagged packages, push
-the `mstpd` branch with `--push-only` for Lakshya to open its PR from the link,
-and after it is reviewed the remaining eligible packages in batches of five (or
-the same with a token, if one is added) - are written out command by command
-in
+The remaining steps - deploy this version on the machine with
+`APM_ALLOW_PUSH`, regenerate the two-field files and review the flagged
+packages, push the `mstpd` branch for Lakshya to open its PR from the link,
+and after it is reviewed the remaining eligible packages in batches of five -
+are written out command by command in
 [docs/production-handoff.md → What happens next](docs/production-handoff.md#what-happens-next).

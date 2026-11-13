@@ -23,7 +23,8 @@ class WorkspaceManager:
                  timeout: int = 60, long_timeout: int = 900,
                  committer_name: str = "ARCoS Package Manager",
                  committer_email: str = "arcos@localhost",
-                 private_url_hint: str = "") -> None:
+                 private_url_hint: str = "",
+                 allow_push: bool = True) -> None:
         self.transports = transports
         self.root = root or "/var/tmp/arcos-package-manager"
         self.timeout = timeout
@@ -34,6 +35,10 @@ class WorkspaceManager:
         # so the transport is chosen from a representative private URL rather
         # than per git command.
         self.private_url_hint = private_url_hint or "ssh://git@github.com/arrcus/x.git"
+        # Whether a workspace from here may push at all. The application wires
+        # it from APM_ALLOW_PUSH, set only on the machine pushes run from; a
+        # copy started anywhere else can read and compare, never push.
+        self.allow_push = allow_push
 
     def transport(self):
         return self.transports.for_url(self.private_url_hint)
@@ -50,6 +55,7 @@ class WorkspaceManager:
             long_timeout=self.long_timeout,
             committer_name=self.committer_name,
             committer_email=self.committer_email,
+            allow_push=self.allow_push,
         )
 
     def for_package(self, package: str, release: str) -> GitWorkspace:

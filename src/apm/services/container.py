@@ -29,10 +29,13 @@ from .mapping_store import MappingStore
 from .metadata_batch_service import MetadataBatchService
 from .patch_id_service import PatchIdService
 from .patch_service import PatchService
+from .publish_status import PublishStatusService
 from .security_service import (
     DebianSecurityProvider, OsvSecurityProvider, SecurityService,
 )
-from .upstream_md_publisher import BRANCH_TEMPLATE, UpstreamMdPublisher
+from .upstream_md_publisher import (
+    BRANCH_TEMPLATE, UpstreamMdPublisher, validate_template,
+)
 from .upstream_md_service import UpstreamMdService
 from .upstream_service import UpstreamService
 
@@ -50,6 +53,7 @@ def build_workspaces(environment: Environment, settings, transports):
         committer_name=environment.committer_name,
         committer_email=environment.committer_email,
         private_url_hint=_private_hint(settings),
+        allow_push=environment.allow_push,
     )
 
 
@@ -137,24 +141,44 @@ class Container:
             debian_patches=self.debian_patches_for,
             store=self.comparison_store,
         )
-        self.patches = PatchService(self.workspaces)
+        patches = self.settings.patches
+        self.patches = PatchService(
+            self.workspaces,
+            validation_commands=patches["validation_commands"],
+            validation_timeout=patches["validation_timeout"],
+        )
         self.upstream_md = UpstreamMdService()
+        publish = self.settings.upstream_md_publish
+        # One template for the plan and the push, checked before either runs,
+        # and a release's own where settings.yaml gives one.
+        branch_template = validate_template(
+            publish["branch_template"] or BRANCH_TEMPLATE)
+        release_templates = {
+            release: validate_template(template) for release, template
+            in publish["release_branch_templates"].items()
+        }
         self.metadata_batch = MetadataBatchService(
-            self.upstream_md, workspaces=self.workspaces
+            self.upstream_md, workspaces=self.workspaces,
+            branch_template=branch_template,
+            release_templates=release_templates,
         )
         self.github = GitHubService(
             token=self.environment.github_token,
             api_url=self.environment.github_api_url,
             timeout=self.environment.http_timeout,
         )
-        publish = self.settings.upstream_md_publish
+        self.publish_status = PublishStatusService(
+            self.transports, self.github,
+            timeout=self.environment.git_long_timeout,
+        )
         self.publisher = UpstreamMdPublisher(
             self.workspaces, self.github,
             author_name=self.environment.committer_name,
             author_email=self.environment.committer_email,
-            branch_template=publish["branch_template"] or BRANCH_TEMPLATE,
+            branch_template=branch_template,
             exclude=publish["exclude"],
             defer=publish["defer"],
+            release_templates=release_templates,
         )
 
     def debian_patches_for(self, resolution):
@@ -171,17 +195,33 @@ class Container:
                               resolution.debian_release, artifacts)
         return report, dict(artifacts.patches)
 
+    @property
+    def api_token(self) -> str:
+        return self.environment.api_token
+
     def capabilities(self) -> dict:
         """What this deployment can actually do, so the UI can say so up front."""
         return {
+            # Whether writes need APM_API_TOKEN; never the token itself.
+            "api_token_required": bool(self.environment.api_token),
             "read_private_repositories": self.private_access(),
-            "create_pull_requests": self.github.can_create_pull_requests,
+            # This application never opens a pull request: it pushes a branch
+            # and a person opens the pull request from its Compare Link.
+            "create_pull_requests": False,
+            "pull_requests": "never",
+            # Whether this machine may push (APM_ALLOW_PUSH).
+            "push_enabled": self.workspaces.allow_push,
+            # Checks are readable only through the API; a pull request opened
+            # from a pushed branch is found from git refs either way.
+            "read_checks": self.github.has_token,
+            "detect_pull_requests": "git refs over SSH",
+            "patch_validation_commands": len(self.settings.patches["validation_commands"]),
             "git": self.transports.describe(),
             "workspace_root": self.workspaces.root,
             "mapping": self.mapping.describe(),
-            # Write operations are disabled outright without a token, so the UI
-            # can say so up front rather than failing at the last step.
-            "read_only": not self.github.can_create_pull_requests,
+            # Nothing can be pushed from here, so the UI can say so up front
+            # rather than failing at the last step.
+            "read_only": not self.workspaces.allow_push,
             "storage": self.storage(),
         }
 

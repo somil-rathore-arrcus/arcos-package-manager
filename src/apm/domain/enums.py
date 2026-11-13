@@ -187,6 +187,24 @@ class PreviewOutcome(str, Enum):
     CONFLICT = "CONFLICT"
     EMPTY = "EMPTY"
     FAILED = "FAILED"
+    # Applied cleanly, but a configured validation command failed: nothing is
+    # pushed until it passes.
+    VALIDATION_FAILED = "VALIDATION_FAILED"
+
+
+class CiState(str, Enum):
+    """A commit's checks as GitHub reports them, or why they cannot be read.
+
+    UNAVAILABLE is never a pass: it means the checks could not be read (no
+    API access, no permission, GitHub unreachable), and says nothing about
+    whether they passed.
+    """
+
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    PENDING = "PENDING"
+    NONE = "NONE"
+    UNAVAILABLE = "UNAVAILABLE"
 
 
 class UpstreamMdOutcome(str, Enum):
@@ -205,14 +223,19 @@ class PublishStatus(str, Enum):
     owns, a closed PR, a file that no longer matches the plan - is its own
     status, so a batch summary says what needs looking at rather than "failed".
 
-    BRANCH_PUSHED is a push-only run's success: the branch is on the fork and a
-    link to open the pull request was generated, but no pull request exists. It
-    is not done - a later run with a token resumes it and opens the PR without
-    pushing again - and it is not a failure, so it is never retried as one.
+    BRANCH_PUSHED is a push's success: the branch is on the fork and a link to
+    open the pull request was generated, but no pull request exists - this tool
+    never opens one. It is not a failure, so it is never retried as one.
+
+    COVERED means another release's branch already proposes the identical file
+    to the same repository and target branch, so nothing is pushed: one target
+    branch takes one debian/upstream.md, and a second branch carrying the same
+    bytes would only duplicate the first.
     """
 
     DRY_RUN_OK = "DRY_RUN_OK"
     BRANCH_PUSHED = "BRANCH_PUSHED"
+    COVERED = "COVERED"
     PR_OPENED = "PR_OPENED"
     PR_EXISTS = "PR_EXISTS"
     PR_MERGED = "PR_MERGED"
@@ -268,4 +291,15 @@ class ErrorCode(str, Enum):
     # moved past; applying it would apply something nobody reviewed.
     STALE_SELECTION = "STALE_SELECTION"
     BASE_MOVED = "BASE_MOVED"
+    # This deployment's own API token (APM_API_TOKEN), not GitHub's, is needed
+    # for a request that pushes, opens a pull request or records an approval.
+    API_TOKEN_REQUIRED = "API_TOKEN_REQUIRED"
+    # GitHub's API quota is spent: nothing is wrong with the token or the
+    # repository, and retrying later is the whole remedy.
+    RATE_LIMITED = "RATE_LIMITED"
+    # This application never opens a pull request; a person opens each one
+    # from the branch's Compare Link.
+    PULL_REQUESTS_DISABLED = "PULL_REQUESTS_DISABLED"
+    # This machine is not the one pushes run from (APM_ALLOW_PUSH is unset).
+    PUSH_DISABLED = "PUSH_DISABLED"
     INTERNAL = "INTERNAL"

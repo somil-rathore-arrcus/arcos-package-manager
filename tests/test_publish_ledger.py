@@ -11,7 +11,9 @@ import pytest
 from apm.domain.enums import PublishStatus
 from apm.domain.models import PublishResult, PullRequest
 from apm.services.github_service import pull_request_link
-from apm.services.publish_ledger import PublishLedger, ledger_paths, supersedes
+from apm.services.publish_ledger import (
+    PublishLedger, all_records, ledger_paths, supersedes,
+)
 
 VERIFY = Path(__file__).resolve().parents[1] / "scripts" / "verify_pr_ledger.py"
 BRANCH = "upstream-metadata/bookworm/mstpd"
@@ -44,7 +46,7 @@ def test_results_survive_a_reload_and_render_a_table(tmp_path):
 
     table = ledger.md_path.read_text()
     assert "| mstpd | PR_OPENED | upstream-metadata/bookworm/mstpd | aaaaaaaaaaaa | " \
-           "https://github.com/Arrcus/mstpd/pull/3 |  |" in table
+           " | https://github.com/Arrcus/mstpd/pull/3 |  |" in table
     assert "remote rejected \\| policy" in table
 
 
@@ -84,8 +86,13 @@ def test_a_pushed_only_branch_keeps_its_full_link_and_shows_a_short_one(tmp_path
 
     table = ledger.md_path.read_text()
     assert (f"| mstpd | BRANCH_PUSHED | {BRANCH} | aaaaaaaaaaaa | "
+            f"https://github.com/Arrcus/mstpd/compare/aminor...{BRANCH} | "
             f"https://github.com/Arrcus/mstpd/compare/aminor...{BRANCH}"
             f"?quick_pull=1 |  |") in table
+    assert payload["entries"][0]["compare_url"] == \
+        f"https://github.com/Arrcus/mstpd/compare/aminor...{BRANCH}"
+    assert payload["entries"][0]["file_url"] == \
+        f"https://github.com/Arrcus/mstpd/blob/{BRANCH}/debian/upstream.md"
     assert "title=" not in table and "Problem" not in table
 
     again = PublishLedger.for_release(tmp_path, "bookworm")
@@ -107,6 +114,27 @@ def _verify(tmp_path, *entries):
 def test_the_ledger_check_accepts_a_pushed_only_branch(tmp_path, capsys):
     code, failures = _verify(tmp_path, _pushed())
     assert (code, failures) == (0, [])
+
+
+def _tracking(branch):
+    link, _ = pull_request_link("Arrcus/mstpd", "aminor", branch,
+                                "mstpd: add debian/upstream.md", "Problem Description :\nx")
+    return _pushed(branch=branch, pr_create_url=link)
+
+
+@pytest.mark.parametrize("branch", [
+    "debian-upstream-tracking", "debian-upstream-tracking/trixie",
+])
+def test_the_ledger_check_accepts_the_tracking_branch(tmp_path, capsys, branch):
+    assert _verify(tmp_path, _tracking(branch)) == (0, [])
+
+
+@pytest.mark.parametrize("branch", ["aminor-x", "debian-upstream-trackingx"])
+def test_the_ledger_check_rejects_a_branch_outside_both_conventions(
+        tmp_path, capsys, branch):
+    code, failures = _verify(tmp_path, _tracking(branch))
+    assert code == 1
+    assert any("one this workflow creates" in f for f in failures)
 
 
 @pytest.mark.parametrize("change", [
@@ -213,3 +241,19 @@ def test_record_all_writes_what_it_may_and_keeps_the_rest(tmp_path):
     assert written == 1
     assert ledger.get("mstpd").status is S.BRANCH_PUSHED
     assert ledger.get("linux").status is S.SKIPPED_EXCLUDED
+
+
+def test_all_records_reads_every_release_but_never_a_dry_run(tmp_path):
+    for release in ("bookworm", "trixie"):
+        PublishLedger.for_release(tmp_path, release).record(PublishResult(
+            package="mstpd", release=release, status=PublishStatus.BRANCH_PUSHED,
+            branch="debian-upstream-tracking", commit=release[0] * 40,
+            pushed=True))
+    PublishLedger.for_release(tmp_path, "bookworm", dry_run=True).record(
+        PublishResult(package="cre2", release="bookworm",
+                      status=PublishStatus.DRY_RUN_OK))
+
+    records = all_records(tmp_path)
+
+    assert sorted((r.release, r.package) for r in records) == [
+        ("bookworm", "mstpd"), ("trixie", "mstpd")]

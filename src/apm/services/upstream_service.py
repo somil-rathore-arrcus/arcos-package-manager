@@ -135,11 +135,44 @@ class UpstreamService:
         updated = resolution.model_copy(deep=True)
         updated.arcos_branch = branch
         updated.arcos_commit = check.sha
+        # A snapshot belongs to the commit pair it was taken for.
+        updated.comparison = None
         updated.notes.append(
             f"Comparing branch '{branch}' ({check.sha[:12]}) instead of the "
             f"commit the release manifest pins."
         )
+        verified = resolution.arcos_commit or ""
+        same = bool(verified) and (check.sha.startswith(verified)
+                                   or verified.startswith(check.sha))
+        if resolution.status is ResolutionStatus.VERIFIED and not same:
+            self._reverify(updated, branch)
         return updated
+
+    def _reverify(self, resolution: UpstreamResolution, branch: str) -> None:
+        """VERIFIED was proved for the pinned commit, not for `branch`.
+
+        Its merge base and counts describe that commit, so they go, and the
+        relationship is measured again for the branch the way a manual upstream
+        is. An approved content base was matched against the pinned commit's
+        tree; it says nothing about another branch, so that goes back to review.
+        """
+        content_base = resolution.synthesized_ancestry
+        resolution.status = ResolutionStatus.NEEDS_REVIEW
+        resolution.verification_level = VerificationLevel.REF_EXISTS
+        resolution.merge_base = None
+        resolution.merge_bases = []
+        resolution.behind = None
+        resolution.arcos_only = None
+        resolution.counts_basis = ""
+        if content_base:
+            resolution.review_reasons.append(ReviewReason.ANCESTRY_NOT_PROBED)
+            resolution.notes.append(
+                f"The approved content base was matched against the pinned "
+                f"commit, not branch '{branch}', so it is unproven here."
+            )
+            return
+        self._check_manual_ancestry(resolution, subject=f"branch '{branch}'",
+                                    label="retarget")
 
     # -- manual ------------------------------------------------------------
 
@@ -230,7 +263,9 @@ class UpstreamService:
         self._check_manual_ancestry(resolution)
         return resolution
 
-    def _check_manual_ancestry(self, resolution: UpstreamResolution) -> None:
+    def _check_manual_ancestry(self, resolution: UpstreamResolution,
+                               subject: str = "this manual upstream",
+                               label: str = "manual") -> None:
         """Prove - or fail to prove - that a manual upstream relates to the fork.
 
         Shared history makes it VERIFIED. No shared history is a finding, and
@@ -240,12 +275,12 @@ class UpstreamService:
         if self.workspaces is None or not resolution.arcos_commit:
             resolution.review_reasons.append(ReviewReason.ANCESTRY_NOT_PROBED)
             resolution.notes.append(
-                "Ancestry was not checked (no workspace or no ARCoS commit), so "
-                "this manual upstream is unproven."
+                f"Ancestry was not checked (no workspace or no ARCoS commit), so "
+                f"{subject} is unproven."
             )
             return
         workspace = self.workspaces.scratch(
-            f"manual-{resolution.package}-{resolution.debian_release}"
+            f"{label}-{resolution.package}-{resolution.debian_release}"
         )
         try:
             workspace.destroy()
@@ -310,7 +345,7 @@ class UpstreamService:
             resolution.status = ResolutionStatus.FAILED
             resolution.review_reasons.append(ReviewReason.PROBE_FAILED)
             resolution.notes.append(
-                f"Ancestry could not be checked for this manual upstream: {exc}. "
+                f"Ancestry could not be checked for {subject}: {exc}. "
                 f"Nothing was measured; this is not a finding."
             )
         finally:

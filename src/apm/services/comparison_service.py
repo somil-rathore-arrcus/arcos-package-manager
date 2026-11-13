@@ -293,6 +293,7 @@ class ComparisonService:
         findings, sources = self._security(
             resolution, workspace, merge_bases, synthesized, arcos_head,
             missing, backported, debian_report, content_ok,
+            upstream_head=upstream_head,
         )
 
         reverted = {s for pair in assessment.reverted_pairs for s in pair}
@@ -407,7 +408,8 @@ class ComparisonService:
             ) from exc
 
     def _security(self, resolution, workspace, merge_bases, synthesized,
-                  arcos_head, missing, backported, debian_report, content_ok):
+                  arcos_head, missing, backported, debian_report, content_ok,
+                  upstream_head=None):
         if self.security is None:
             return [], []
         base_commits = list(merge_bases)
@@ -420,6 +422,12 @@ class ComparisonService:
             except GitWorkspaceError:
                 return None
 
+        def upstream_contains(sha: str) -> Optional[bool]:
+            try:
+                return workspace.is_ancestor(sha, upstream_head)
+            except GitWorkspaceError:
+                return None
+
         context = SecurityContext(
             package=resolution.package, release=resolution.debian_release,
             upstream_repository=resolution.upstream_repository.url,
@@ -428,6 +436,7 @@ class ComparisonService:
             present=[c.sha for c in backported],
             debian_patches=debian_report,
             contains=contains,
+            upstream_contains=upstream_contains if upstream_head else None,
         )
         answers = self.security.assess(context)
         findings = [f for a in answers for f in a.findings]
